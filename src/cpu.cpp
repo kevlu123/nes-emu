@@ -8,4 +8,8 @@ namespace nes
         ppu_bus(ppu_bus)
     {
     }
+
+    void cpu_t::reset()
+    {
+    }
 }

@@ -18,6 +18,7 @@ namespace nes
                 return;
             }
         }
+        SPDLOG_ERROR("bus_t::disconnect_read failed");
     }
 
     void bus_t::disconnect_write(void* obj)
@@ -30,6 +31,7 @@ namespace nes
                 return;
             }
         }
+        SPDLOG_ERROR("bus_t::disconnect_write failed");
     }
 
     uint8_t bus_t::read(uint16_t addr)

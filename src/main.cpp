@@ -7,9 +7,10 @@
 #include "imgui_impl_sdl3.h"
 #include "imgui_impl_sdlrenderer3.h"
 
-#include "spdlog/spdlog.h"
-
 #include "nes.h"
+#include "cart.h"
+
+#include <fstream>
 
 struct colour_t
 {
@@ -85,6 +86,33 @@ static const colour_t NTSC_PALETTE[64] = {
 
 int main(int argc, char* argv[])
 {
+    if (argc < 2)
+    {
+        SPDLOG_ERROR("Usage: {} <rom_file>", argv[0]);
+        return -1;
+    }
+    const char* rom_file = argv[1];
+
+    std::ifstream rom(rom_file, std::ios::binary | std::ios::ate);
+    size_t rom_size = rom.tellg();
+    rom.seekg(0, std::ios::beg);
+    if (!rom.is_open() || rom_size == 0)
+    {
+        SPDLOG_ERROR("Failed to open ROM file: {}", rom_file);
+        return -1;
+    }
+    std::vector<uint8_t> rom_data(rom_size);
+    rom.read((char*)rom_data.data(), rom_size);
+
+    nes::cart_t cart;
+    if (!nes::cart_t::try_load(std::move(rom_data), cart))
+    {
+        SPDLOG_ERROR("Failed to load ROM file: {}", rom_file);
+        return -1;
+    }
+    auto nes = std::make_unique<nes::nes_t>();
+    nes->load_cart(std::move(cart));
+
     // Initialise SDL
 
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD))
@@ -150,8 +178,6 @@ int main(int argc, char* argv[])
     ImGui_ImplSDLRenderer3_Init(renderer);
 
     // Main loop
-
-    auto nes = std::make_unique<nes::nes_t>();
 
     SPDLOG_INFO("Application initialised");
     bool running = true;

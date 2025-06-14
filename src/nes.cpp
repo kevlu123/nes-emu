@@ -37,8 +37,27 @@ namespace nes
         }
     }
 
+    void nes_t::reset()
+    {
+        ram.reset();
+        cpu.reset();
+        ppu.reset();
+        apu.reset();
+        controller.reset();
+        if (cart)
+        {
+            cart->reset();
+        }
+    }
+
     void nes_t::clock_frame()
     {
 
+    }
+
+    void nes_t::load_cart(cart_t cart)
+    {
+        this->cart = std::move(cart);
+        reset();
     }
 }

@@ -8,6 +8,11 @@ namespace nes
     {
     }
 
+    void ram_t::reset()
+    {
+        memset(data, 0, sizeof(data));
+    }
+
     bool ram_t::read(uint16_t addr, uint8_t& value)
     {
         if (addr < 0x2000)

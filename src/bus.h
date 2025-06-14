@@ -4,9 +4,6 @@
 
 namespace nes
 {
-    using bus_read_t = bool (*)(uint16_t addr, uint8_t& value, void* ctx);
-    using bus_write_t = bool (*)(uint16_t addr, uint8_t value, void* ctx);
-
     struct bus_t
     {
         bus_t();
@@ -39,9 +36,14 @@ namespace nes
 
         void disconnect_read(void* obj);
         void disconnect_write(void* obj);
+
         uint8_t read(uint16_t addr);
         void write(uint16_t addr, uint8_t value);
+
     private:
+        using bus_read_t = bool (*)(uint16_t addr, uint8_t& value, void* ctx);
+        using bus_write_t = bool (*)(uint16_t addr, uint8_t value, void* ctx);
+        
         template <typename Callback>
         struct connection_t
         {

@@ -7,6 +7,10 @@ namespace nes
         : ppu_bus(ppu_bus)
     {
     }
+
+    void ppu_t::reset()
+    {
+    }
     
     bool ppu_t::cpu_read(uint16_t addr, uint8_t& value)
     {

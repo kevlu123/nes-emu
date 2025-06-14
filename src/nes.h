@@ -1,6 +1,5 @@
 #pragma once
 #include "pch.h"
-#include <memory>
 
 #include "ram.h"
 #include "cpu.h"
@@ -8,6 +7,8 @@
 #include "apu.h"
 #include "controller.h"
 #include "cart.h"
+
+#include <optional>
 
 namespace nes
 {
@@ -19,8 +20,10 @@ namespace nes
             (float)SCREEN_WIDTH / SCREEN_HEIGHT;
 
         nes_t();
+        void reset();
         void clock();
         void clock_frame();
+        void load_cart(cart_t cart);
 
         bus_t cpu_bus;
         bus_t ppu_bus;
@@ -30,7 +33,7 @@ namespace nes
         ppu_t ppu;
         apu_t apu;
         controller_t controller;
-        std::unique_ptr<cart_t> cart;
+        std::optional<cart_t> cart;
 
         uint8_t screen_buffer[SCREEN_WIDTH * SCREEN_HEIGHT];
     };

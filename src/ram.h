@@ -9,6 +9,7 @@ namespace nes
         static constexpr int RAM_SIZE = 0x800;
 
         ram_t();
+        void reset();
         bool read(uint16_t addr, uint8_t& value);
         bool write(uint16_t addr, uint8_t value);
 

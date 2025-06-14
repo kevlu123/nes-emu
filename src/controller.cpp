@@ -7,6 +7,10 @@ namespace nes
     {
     }
 
+    void controller_t::reset()
+    {
+    }
+
     bool controller_t::read(uint16_t addr, uint8_t& value)
     {
         return false;
