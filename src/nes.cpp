@@ -5,7 +5,7 @@
 namespace nes
 {
     nes_t::nes_t() :
-        cpu(cpu_bus, ppu_bus),
+        cpu(cpu_bus),
         ppu(ppu_bus)
     {
         cpu_bus.connect_read<&ram_t::read>(ram);
