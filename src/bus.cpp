@@ -10,7 +10,7 @@ namespace nes
 
     void bus_t::disconnect_read(void* obj)
     {
-        for (auto it = readers.begin(); it != readers.end();)
+        for (auto it = readers.begin(); it != readers.end(); ++it)
         {
             if (it->ctx == obj)
             {
@@ -23,7 +23,7 @@ namespace nes
 
     void bus_t::disconnect_write(void* obj)
     {
-        for (auto it = writers.begin(); it != writers.end();)
+        for (auto it = writers.begin(); it != writers.end(); ++it)
         {
             if (it->ctx == obj)
             {
@@ -34,15 +34,16 @@ namespace nes
         SPDLOG_ERROR("bus_t::disconnect_write failed");
     }
 
-    uint8_t bus_t::read(uint16_t addr)
+    uint8_t bus_t::read(uint16_t addr, bool readonly)
     {
         for (const auto& reader : readers)
         {
-            if (reader.callback(addr, last_read, reader.ctx))
+            if (reader.callback(addr, last_read, readonly, reader.ctx))
             {
-                break;
+                return last_read;
             }
         }
+        SPDLOG_WARN("No read handler *{:04X}", addr);
         return last_read;
     }
 
@@ -55,5 +56,6 @@ namespace nes
                 return;
             }
         }
+        SPDLOG_WARN("No write handler *{:04X} = {:02X}", addr, value);
     }
 }

@@ -8,7 +8,7 @@ namespace nes
     {
         apu_t();
         void reset();
-        bool read(uint16_t addr, uint8_t& value);
+        bool read(uint16_t addr, uint8_t& value, bool readonly);
         bool write(uint16_t addr, uint8_t value);
     };
 }

@@ -11,7 +11,7 @@ namespace nes
     {
     }
 
-    bool apu_t::read(uint16_t addr, uint8_t& value)
+    bool apu_t::read(uint16_t addr, uint8_t& value, bool readonly)
     {
         return false;
     }

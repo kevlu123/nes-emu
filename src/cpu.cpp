@@ -13,6 +13,8 @@ namespace nes
         .opcode = &cpu_t::_opcode,       \
         .addr_mode = &cpu_t::_addr_mode, \
         .cycles = _cycles,               \
+        .opcode_name = #_opcode,         \
+        .addr_mode_name = #_addr_mode,   \
     }
 
     const instruction_t cpu_t::instructions[256]
@@ -40,14 +42,33 @@ namespace nes
     };
 #undef X
 
-    cpu_t::cpu_t(bus_t &cpu_bus) :
-        cpu_bus(&cpu_bus),
-        status{},
-        ra(0),
-        rx(0),
-        ry(0),
-        sp(0xFD),
-        pc(0)
+    int instruction_t::byte_count() const
+    {
+        if (addr_mode == &cpu_t::IMP || addr_mode == &cpu_t::ACC)
+        {
+            return 1;
+        }
+        else if (addr_mode == &cpu_t::ABS
+              || addr_mode == &cpu_t::ABX
+              || addr_mode == &cpu_t::ABY
+              || addr_mode == &cpu_t::IND)
+        {
+            return 3;
+        }
+        else
+        {
+            return 2;
+        }
+    }
+
+    cpu_t::cpu_t(bus_t &cpu_bus)
+        : cpu_bus(&cpu_bus),
+            status{},
+            ra(0),
+            rx(0),
+            ry(0),
+            sp(0xFD),
+            pc(0)
     {
         status.i = true;
         status.u = true;

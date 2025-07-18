@@ -13,7 +13,7 @@ namespace nes
         memset(data, 0, sizeof(data));
     }
 
-    bool ram_t::read(uint16_t addr, uint8_t& value)
+    bool ram_t::read(uint16_t addr, uint8_t& value, bool readonly)
     {
         if (addr < 0x2000)
         {

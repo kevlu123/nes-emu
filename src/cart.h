@@ -52,7 +52,7 @@ namespace nes
     {
         static bool try_load(std::vector<uint8_t> rom, cart_t& out_cart);
         void reset();
-        bool read(uint16_t addr, uint8_t& value);
+        bool read(uint16_t addr, uint8_t& value, bool readonly);
         bool write(uint16_t addr, uint8_t value);
         
         ines_header_t header;

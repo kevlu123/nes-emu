@@ -11,6 +11,9 @@ namespace nes
         void (cpu_t::*opcode)(void);
         bool (cpu_t::*addr_mode)(void);
         int cycles;
+        const char* opcode_name;
+        const char* addr_mode_name;
+        int byte_count() const;
     };
 
     struct cpu_t
@@ -43,12 +46,6 @@ namespace nes
         uint8_t sp;
         uint16_t pc;
 
-    private:
-        bus_t* cpu_bus;
-        uint16_t addr;
-        bool crossed_page;
-        int cycles_remaining = 0;
-
         static const instruction_t instructions[256];
 
         void push_stack(uint8_t value);
@@ -72,5 +69,11 @@ namespace nes
 
         opcode_fn AAC, SAX, ARR, ASR, ATX, AXA, AXS, DCP, DOP, ISB, KIL;
         opcode_fn LAR, LAX, RLA, RRA, SLO, SRE, SXA, SYA, TOP, XAA, XAS;
+
+    private:
+        bus_t* cpu_bus;
+        uint16_t addr;
+        bool crossed_page;
+        int cycles_remaining = 0;
     };
 }

@@ -14,15 +14,11 @@ namespace nes
 {
     struct nes_t
     {
-        static constexpr int SCREEN_WIDTH = 256;
-        static constexpr int SCREEN_HEIGHT = 240;
-        static constexpr float SCREEN_ASPECT =
-            (float)SCREEN_WIDTH / SCREEN_HEIGHT;
-
         nes_t();
         void reset();
         void clock();
         void clock_frame();
+        void unload_cart();
         void load_cart(cart_t cart);
 
         bus_t cpu_bus;
@@ -35,6 +31,8 @@ namespace nes
         controller_t controller;
         std::optional<cart_t> cart;
 
-        uint8_t screen_buffer[SCREEN_WIDTH * SCREEN_HEIGHT];
+        uint64_t ppu_clock_count;
+
+        uint8_t screen_buffer[ppu_t::SCREEN_WIDTH * ppu_t::SCREEN_HEIGHT];
     };
 }

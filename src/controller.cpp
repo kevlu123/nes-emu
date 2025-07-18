@@ -11,7 +11,7 @@ namespace nes
     {
     }
 
-    bool controller_t::read(uint16_t addr, uint8_t& value)
+    bool controller_t::read(uint16_t addr, uint8_t& value, bool readonly)
     {
         return false;
     }

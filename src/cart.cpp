@@ -34,7 +34,7 @@ namespace nes
         }
 
         // Load PRG ROM
-        size_t prg_size = cart.header.prg_chunks * 16 * 1024;
+        size_t prg_size = cart.header.prg_chunks * 0x4000;
         if (rom.size() < i + prg_size)
         {
             SPDLOG_ERROR("Invalid ROM: PRG ROM too short");
@@ -44,7 +44,7 @@ namespace nes
 
         // Load CHR ROM
         i += prg_size;
-        size_t chr_size = cart.header.chr_chunks * 8 * 1024;
+        size_t chr_size = cart.header.chr_chunks * 0x2000;
         if (rom.size() < i + chr_size)
         {
             SPDLOG_ERROR("Invalid ROM: CHR ROM too short");
@@ -74,8 +74,18 @@ namespace nes
     {
     }
 
-    bool cart_t::read(uint16_t addr, uint8_t& value)
+    bool cart_t::read(uint16_t addr, uint8_t& value, bool readonly)
     {
+        if (addr < 0x2000)
+        {
+            value = chr_rom[addr];
+            return true;
+        }
+        else if (addr >= 0x8000)
+        {
+            value = prg_rom[(addr - 0x8000) % prg_rom.size()];
+            return true;
+        }
         return false;
     }
 
