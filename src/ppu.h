@@ -38,6 +38,14 @@ namespace nes
             return get_nametable_addr(nametable) + 0x3C0;
         }
 
+        static constexpr uint16_t get_attribute_addr(uint8_t nametable,
+            uint8_t coarse_x, uint8_t coarse_y)
+        {
+            return get_attribute_table_addr(nametable)
+                + ((coarse_y >> 2) & 0b111) * 8
+                + ((coarse_x >> 2) & 0b111);
+        }
+
         static constexpr uint16_t get_tile_addr(
             uint8_t nametable,
             uint8_t coarse_x,

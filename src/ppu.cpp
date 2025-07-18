@@ -119,6 +119,7 @@ namespace nes
         {
             // OAMADDR
             SPDLOG_WARN("OAMADDR write stubbed");
+            return true;
         }
         else if (addr == 0x2004)
         {
@@ -239,13 +240,12 @@ namespace nes
             v_vram_addr.fine_y_scroll = t_vram_addr.fine_y_scroll;
         }
 
-        uint8_t pattern = 0;
         if (((dot >= 1 && dot <= 256) || (dot >= 321 && dot <= 336))
             && rendering_enabled)
         {
-            uint8_t fine_x = x_scroll.value;
-            pattern = ((pattern_lo_read_shift_reg >> fine_x) & 1)
-                    | (((pattern_hi_read_shift_reg >> fine_x) & 1) << 1);
+            uint8_t pattern =
+                ((pattern_lo_read_shift_reg >> x_scroll.value) & 1)
+                | (((pattern_hi_read_shift_reg >> x_scroll.value) & 1) << 1);
 
             pattern_lo_read_shift_reg >>= 1;
             pattern_lo_read_shift_reg |= 0x8000;
@@ -254,7 +254,23 @@ namespace nes
 
             if (dot >= 1 && dot <= 256 && scanline < SCREEN_HEIGHT)
             {
-                screen_buffer[scanline * SCREEN_WIDTH + dot - 1] = pattern;
+                uint8_t attribute = attribute_read;
+                attribute >>= 4 * ((v_vram_addr.coarse_y_scroll >> 1) & 1);
+                attribute >>= 2 * ((v_vram_addr.coarse_x_scroll >> 1) & 1);
+                attribute &= 0b11;
+                
+                bool is_fg_palette = false;
+                
+                uint8_t palette_index = pattern
+                    | (attribute << 2)
+                    | (is_fg_palette << 4);
+                uint8_t colour_index = palette[palette_index];
+                if (colour_index)
+                {
+                    volatile int i = 0;
+                    i = 1;
+                }
+                screen_buffer[scanline * SCREEN_WIDTH + dot - 1] = colour_index;
             }
 
             switch (dot % 8)
@@ -266,8 +282,10 @@ namespace nes
                         v_vram_addr.coarse_y_scroll));
                 break;
             case 4:
-                // attribute_read = ppu_bus->read(
-                //     get_attribute_addr());
+                attribute_read = ppu_bus->read(
+                    get_attribute_addr(v_vram_addr.nametable_select,
+                        v_vram_addr.coarse_x_scroll,
+                        v_vram_addr.coarse_y_scroll));
                 break;
             case 6:
                 pattern_lo_read = ppu_bus->read(
