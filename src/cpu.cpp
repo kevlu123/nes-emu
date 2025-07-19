@@ -8,13 +8,13 @@ static uint8_t page_differs(uint16_t addr1, uint16_t addr2)
 
 namespace nes
 {
-#define X(_opcode, _addr_mode, _cycles)  \
-    instruction_t{                       \
-        .opcode = &cpu_t::_opcode,       \
-        .addr_mode = &cpu_t::_addr_mode, \
-        .cycles = _cycles,               \
-        .opcode_name = #_opcode,         \
-        .addr_mode_name = #_addr_mode,   \
+#define X(_opcode, _addr_mode, _cycles)                                          \
+    instruction_t{                                                               \
+        .opcode = &cpu_t::_opcode,                                               \
+        .addr_mode = &cpu_t::_addr_mode,                                         \
+        .cycles = _cycles,                                                       \
+        .opcode_name = { #_opcode[0], #_opcode[1], #_opcode[2], 0 },             \
+        .addr_mode_name = { #_addr_mode[0], #_addr_mode[1], #_addr_mode[2], 0 }, \
     }
 
     const instruction_t cpu_t::instructions[256]

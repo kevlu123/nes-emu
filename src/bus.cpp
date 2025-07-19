@@ -3,8 +3,9 @@
 
 namespace nes
 {
-    bus_t::bus_t(std::string name)
+    bus_t::bus_t(uint16_t mask, std::string name)
         : last_read(0xAA),
+          mask(mask),
           name(std::move(name))
     {
     }
@@ -37,6 +38,7 @@ namespace nes
 
     uint8_t bus_t::read(uint16_t addr, bool readonly)
     {
+        addr &= mask;
         for (const auto& reader : readers)
         {
             if (reader.callback(addr, last_read, readonly, reader.ctx))
@@ -60,6 +62,7 @@ namespace nes
 
     void bus_t::write(uint16_t addr, uint8_t value)
     {
+        addr &= mask;
         for (const auto& writer : writers)
         {
             if (writer.callback(addr, value, writer.ctx))

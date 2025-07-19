@@ -75,6 +75,17 @@ namespace nes
             return get_pattern_lo_addr(pattern_table, tile_index, fine_y) + 8;
         }
 
+        static constexpr uint16_t get_palette_addr(
+            uint8_t is_fg,
+            uint8_t attribute,
+            uint8_t pattern)
+        {
+            return ((is_fg & 0b1) << 4)
+                + ((attribute & 0b11) << 2)
+                + (pattern & 0b11)
+                + 0x3F00;
+        }
+
         static constexpr uint8_t reverse_bits(uint8_t value)
         {
             value = (value & 0xF0) >> 4 | (value & 0x0F) << 4;

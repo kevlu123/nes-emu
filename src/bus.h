@@ -2,12 +2,13 @@
 #include "pch.h"
 #include <vector>
 #include <string>
+#include <span>
 
 namespace nes
 {
     struct bus_t
     {
-        bus_t(std::string name);
+        bus_t(uint16_t mask, std::string name);
 
         template <auto /* bool (T::*)(uint16_t, uint8_t&) */ Read, typename T>
         void connect_read(T* obj)
@@ -62,6 +63,7 @@ namespace nes
         std::vector<connection_t<bus_read_t>> readers;
         std::vector<connection_t<bus_write_t>> writers;
         uint8_t last_read;
+        uint16_t mask;
         std::string name;
     };
 }

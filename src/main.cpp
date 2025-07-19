@@ -86,10 +86,82 @@ static const colour_t NTSC_PALETTE[64] = {
 static struct
 {
     SDL_Window* window = nullptr;
+    SDL_Renderer* renderer = nullptr;
     std::unique_ptr<nes::nes_t> nes;
     bool emulation_running = true;
-    bool enable_debug_grid = false;
+
+    SDL_Texture* debug_palette_tex = nullptr;
+    SDL_Texture* debug_pattern_table_tex = nullptr;
+    SDL_Texture* debug_nametable_tex = nullptr;
+    uint8_t debug_palette[32];
+    uint8_t debug_pattern_table[256 * 128];
+    uint8_t debug_nametable[512 * 512];
+    bool debug_grid_enable = false;
 } context;
+
+static SDL_Texture* CreateTexture(int width, int height)
+{
+    SDL_Texture* texture = SDL_CreateTexture(
+        context.renderer,
+        SDL_PIXELFORMAT_RGBA32,
+        SDL_TEXTUREACCESS_STREAMING,
+        width,
+        height);
+    if (texture == nullptr)
+    {
+        SPDLOG_ERROR("Error: SDL_CreateTexture(): {}", SDL_GetError());
+        return nullptr;
+    }
+    SDL_SetTextureScaleMode(texture, SDL_SCALEMODE_NEAREST);
+    return texture;
+}
+
+static void WriteTexture(
+    SDL_Texture* texture,
+    const uint8_t* colour_indices,
+    bool debug_grid = false)
+{
+    float fwidth;
+    float fheight;
+    int width;
+    int height;
+    SDL_GetTextureSize(texture, &fwidth, &fheight);
+    width = (int)fwidth;
+    height = (int)fheight;
+
+    void* pixels;
+    int pitch;
+    SDL_LockTexture(texture, nullptr, &pixels, &pitch);
+
+    for (int y = 0; y < height; y++)
+    {
+        uint8_t* row = (uint8_t*)pixels + y * pitch;
+        for (int x = 0; x < width; x++)
+        {
+            uint8_t colour_index = colour_indices[y * width + x];
+            const colour_t& colour = NTSC_PALETTE[colour_index % 64];
+            memcpy(row + (x * 4), &colour, sizeof(colour));
+
+            if (debug_grid)
+            {
+                if ((x + y) % 2 == 0)
+                {
+                    row[(x * 4)] += 16;
+                    row[(x * 4) + 1] += 16;
+                    row[(x * 4) + 2] += 16;
+                }
+                if (x % 8 == 0 || y % 8 == 0)
+                {
+                    row[(x * 4)] += 16;
+                    row[(x * 4) + 1] += 16;
+                    row[(x * 4) + 2] += 16;
+                }
+            }
+        }
+    }
+
+    SDL_UnlockTexture(texture);
+}
 
 struct disassembly_t
 {
@@ -101,6 +173,7 @@ struct disassembly_t
 static void show_cpu_dism()
 {
     ImGui::Begin("CPU");
+    ImGui::SetWindowSize({});
     ImGui::Text("SP:   %02X   A: %02X   X: %02X   Y: %02X",
         context.nes->cpu.sp,
         context.nes->cpu.ra,
@@ -139,50 +212,108 @@ static void show_cpu_dism()
             uint8_t opcode = context.nes->cpu_bus.read(addr, true);
             auto& instruction = nes::cpu_t::instructions[opcode];
 
+            bool is_write_only = instruction.opcode == &nes::cpu_t::STA
+                              || instruction.opcode == &nes::cpu_t::STX
+                              || instruction.opcode == &nes::cpu_t::STY
+                              || instruction.opcode == &nes::cpu_t::SAX
+                              || instruction.opcode == &nes::cpu_t::AXA
+                              || instruction.opcode == &nes::cpu_t::SXA
+                              || instruction.opcode == &nes::cpu_t::SYA
+                              || instruction.opcode == &nes::cpu_t::XAS;
+
             std::string args;
-            if (instruction.addr_mode == &nes::cpu_t::ABS)
+            if (instruction.addr_mode == &nes::cpu_t::IMM)
             {
-                uint8_t arg1 = context.nes->cpu_bus.read(addr + 1, true);
-                uint8_t arg2 = context.nes->cpu_bus.read(addr + 2, true);
-                args = fmt::format("{:02X}{:02X}", arg2, arg1);
+                uint8_t value = context.nes->cpu_bus.read(addr + 1, true);
+                args = fmt::format(" #{:02X}", value);
             }
-            else if (instruction.addr_mode == &nes::cpu_t::IMM)
+            else if (instruction.addr_mode == &nes::cpu_t::ACC)
             {
-                uint8_t arg = context.nes->cpu_bus.read(addr + 1, true);
-                args = fmt::format(" #{:02X}", arg);
+                args = fmt::format("       =  #{:02X}", context.nes->cpu.ra);
+            }
+            else if (instruction.addr_mode == &nes::cpu_t::ABS)
+            {
+                uint16_t abs_addr = (context.nes->cpu_bus.read(addr + 2, true) << 8)
+                    | context.nes->cpu_bus.read(addr + 1, true);
+                args = fmt::format("{:04X}", abs_addr);
+                if (instruction.opcode != &nes::cpu_t::JMP
+                    && instruction.opcode != &nes::cpu_t::JSR)
+                {
+                    uint8_t data = context.nes->cpu_bus.read(abs_addr, true);
+                    args += fmt::format("   =  #{:02X}", data);
+                }
+            }
+            else if (instruction.addr_mode == &nes::cpu_t::ABX)
+            {
+                uint16_t abs_addr = (context.nes->cpu_bus.read(addr + 2, true) << 8)
+                    | context.nes->cpu_bus.read(addr + 1, true);
+                uint8_t data = context.nes->cpu_bus.read(abs_addr + context.nes->cpu.rx, true);
+                args = fmt::format("{:04X},X =  #{:02X}", abs_addr, data);
+            }
+            else if (instruction.addr_mode == &nes::cpu_t::ABY)
+            {
+                uint16_t abs_addr = (context.nes->cpu_bus.read(addr + 2, true) << 8)
+                    | context.nes->cpu_bus.read(addr + 1, true);
+                uint8_t data = context.nes->cpu_bus.read(abs_addr + context.nes->cpu.ry, true);
+                args = fmt::format("{:04X},Y =  #{:02X}", abs_addr, data);
             }
             else if (instruction.addr_mode == &nes::cpu_t::ZRP)
             {
-                uint8_t arg = context.nes->cpu_bus.read(addr + 1, true);
-                args = fmt::format("  {:02X}", arg);
+                uint8_t zrp_addr = context.nes->cpu_bus.read(addr + 1, true);
+                uint8_t data = context.nes->cpu_bus.read(zrp_addr, true);
+                args = fmt::format("  {:02X}   =  #{:02X}", zrp_addr, data);
             }
-            else if (instruction.addr_mode == &nes::cpu_t::ZPX || instruction.addr_mode == &nes::cpu_t::ZPY)
+            else if (instruction.addr_mode == &nes::cpu_t::ZPX)
             {
-                uint8_t arg = context.nes->cpu_bus.read(addr + 1, true);
-                args = fmt::format("{:02X},X", arg);
+                uint8_t zrp_addr = context.nes->cpu_bus.read(addr + 1, true);
+                uint8_t data = context.nes->cpu_bus.read(
+                    (zrp_addr + context.nes->cpu.rx) & 0xFF, true);
+                args = fmt::format("  {:02X},X =  #{:02X}", zrp_addr, data);
             }
-            else if (instruction.addr_mode == &nes::cpu_t::ABX || instruction.addr_mode == &nes::cpu_t::ABY)
+            else if (instruction.addr_mode == &nes::cpu_t::ZPY)
             {
-                uint8_t arg1 = context.nes->cpu_bus.read(addr + 1, true);
-                uint8_t arg2 = context.nes->cpu_bus.read(addr + 2, true);
-                args = fmt::format("{:02X}{:02X},{}", arg2, arg1,
-                    instruction.addr_mode == &nes::cpu_t::ABX ? "X" : "Y");
+                uint8_t zrp_addr = context.nes->cpu_bus.read(addr + 1, true);
+                uint8_t data = context.nes->cpu_bus.read(
+                    (zrp_addr + context.nes->cpu.ry) & 0xFF, true);
+                args = fmt::format("  {:02X},Y =  #{:02X}", zrp_addr, data);
             }
             else if (instruction.addr_mode == &nes::cpu_t::IDX)
             {
-                uint8_t arg = context.nes->cpu_bus.read(addr + 1, true);
-                args = fmt::format("({:02X},X)", arg);
+                uint8_t zrp_addr = context.nes->cpu_bus.read(addr + 1, true)
+                    + context.nes->cpu.rx;
+                uint16_t abs_addr = (context.nes->cpu_bus.read((zrp_addr + 1) & 0xFF) << 8)
+                    | context.nes->cpu_bus.read(zrp_addr);
+                uint8_t data = context.nes->cpu_bus.read(abs_addr, true);
+                args = fmt::format("({:02X},X) =  #{:02X}", zrp_addr, data);
             }
             else if (instruction.addr_mode == &nes::cpu_t::IDY)
             {
-                uint8_t arg = context.nes->cpu_bus.read(addr + 1, true);
-                args = fmt::format("({:02X}),Y", arg);
+                uint8_t zrp_addr = context.nes->cpu_bus.read(addr + 1, true);
+                uint16_t abs_addr = (context.nes->cpu_bus.read(zrp_addr) << 8)
+                    | context.nes->cpu_bus.read((zrp_addr + 1) & 0xFF);
+                uint8_t data = context.nes->cpu_bus.read(
+                    abs_addr + context.nes->cpu.ry, true);
+                args = fmt::format("({:02X}),Y =  #{:02X}", zrp_addr, data);
             }
             else if (instruction.addr_mode == &nes::cpu_t::IND)
             {
-                uint8_t arg1 = context.nes->cpu_bus.read(addr + 1, true);
-                uint8_t arg2 = context.nes->cpu_bus.read(addr + 2, true);
-                args = fmt::format("({:02X}{:02X})", arg2, arg1);
+                uint16_t abs_addr = (context.nes->cpu_bus.read(addr + 2, true) << 8)
+                    | context.nes->cpu_bus.read(addr + 1, true);
+                uint16_t target_addr = context.nes->cpu_bus.read(abs_addr) |
+                    (context.nes->cpu_bus.read(((abs_addr + 1) & 0xFF) | (abs_addr & 0xFF00)) << 8);
+                args = fmt::format("({:04X})   = {:04X}", abs_addr, target_addr);
+            }
+            else if (instruction.addr_mode == &nes::cpu_t::REL)
+            {
+                int8_t offset = (int8_t)context.nes->cpu_bus.read(addr + 1, true);
+                uint16_t target_addr = addr + offset + 2;
+                args = fmt::format(" {}{:02X}   = {:04X}",
+                    offset >= 0 ? '+' : '-', abs(offset), target_addr);
+            }
+
+            if (is_write_only && args.size() > 6)
+            {
+                args = args.substr(0, 6);
             }
 
             disassembly.push_back(disassembly_t{
@@ -224,14 +355,15 @@ static void show_cpu_dism()
 static void show_ram()
 {
     ImGui::Begin("RAM");
-    ImGui::Text("    0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F");
+    ImGui::SetWindowSize({ 0, 640 });
+    ImGui::Text("       0  1  2  3   4  5  6  7   8  9  A  B   C  D  E  F");
     for (size_t i = 0; i < 0x800; i += 0x100)
     {
         ImGui::Text("");
         for (size_t j = 0; j < 0x100; j += 16)
         {
-            ImGui::Text("%04X: %02X %02X %02X %02X %02X %02X %02X %02X "
-                "%02X %02X %02X %02X %02X %02X %02X %02X",
+            ImGui::Text("%04X: %02X %02X %02X %02X  %02X %02X %02X %02X  "
+                "%02X %02X %02X %02X  %02X %02X %02X %02X",
                 i + j,
                 context.nes->cpu_bus.read((uint16_t)(i + j +  0), true),
                 context.nes->cpu_bus.read((uint16_t)(i + j +  1), true),
@@ -251,6 +383,161 @@ static void show_ram()
                 context.nes->cpu_bus.read((uint16_t)(i + j + 15), true));
         }
     }
+    ImGui::End();
+}
+
+static void show_palette()
+{
+    size_t i = 0;
+    for (uint8_t is_fg = 0; is_fg < 2; is_fg++)
+    for (uint8_t attribute = 0; attribute < 4; attribute++)
+    for (uint8_t pattern = 0; pattern < 4; pattern++)
+    {
+        context.debug_palette[i++] = context.nes->ppu_bus.read(
+            nes::ppu_t::get_palette_addr(
+                is_fg,
+                attribute,
+                pattern),
+            true);
+    }
+
+    WriteTexture(context.debug_palette_tex, context.debug_palette);
+    ImGui::Begin("PALETTE RAM");
+    ImGui::SetWindowSize({});
+    ImGui::Image(context.debug_palette_tex, { 16 * 16, 16 * 2 });
+    ImGui::End();
+}
+
+static void show_pattern_table()
+{
+    size_t i = 0;
+    for (uint8_t coarse_y = 0; coarse_y < 16; coarse_y++)
+    for (uint8_t fine_y = 0; fine_y < 8; fine_y++)
+    for (uint8_t lr_table = 0; lr_table < 2; lr_table++)
+    for (uint8_t coarse_x = 0; coarse_x < 16; coarse_x++)
+    {
+        uint8_t pattern_lo = context.nes->ppu_bus.read(
+            nes::ppu_t::get_pattern_lo_addr(
+                lr_table,
+                coarse_y * 16 + coarse_x,
+                fine_y),
+            true);
+        uint8_t pattern_hi = context.nes->ppu_bus.read(
+            nes::ppu_t::get_pattern_hi_addr(
+                lr_table,
+                coarse_y * 16 + coarse_x,
+                fine_y),
+            true);
+        pattern_lo = nes::ppu_t::reverse_bits(pattern_lo);
+        pattern_hi = nes::ppu_t::reverse_bits(pattern_hi);
+        for (uint8_t fine_x = 0; fine_x < 8; fine_x++)
+        {
+            uint8_t pattern = ((pattern_lo >> fine_x) & 1)
+                | (((pattern_hi >> fine_x) & 1) << 1);
+            static const uint8_t colours[4] = { 0x0F, 0x00, 0x10, 0x20 };
+            context.debug_pattern_table[i++] = colours[pattern];
+        }
+    }
+
+    WriteTexture(context.debug_pattern_table_tex, context.debug_pattern_table);
+    ImGui::Begin("PATTERN TABLE");
+    ImGui::SetWindowSize({});
+    ImGui::Image(context.debug_pattern_table_tex, { 512, 256 });
+    ImGui::End();
+}
+
+static void show_nametable()
+{
+    size_t i = 0;
+    for (uint8_t nametable_y = 0; nametable_y < 2; nametable_y++)
+    {
+        for (uint8_t coarse_y = 0; coarse_y < 30; coarse_y++)
+        for (uint8_t fine_y = 0; fine_y < 8; fine_y++)
+        for (uint8_t nametable_x = 0; nametable_x < 2; nametable_x++)
+        {
+            uint8_t nametable = nametable_y * 2 + nametable_x;
+            for (uint8_t coarse_x = 0; coarse_x < 32; coarse_x++)
+            {
+                uint8_t attribute = context.nes->ppu_bus.read(
+                    nes::ppu_t::get_attribute_addr(
+                        nametable,
+                        coarse_x,
+                        coarse_y),
+                    true);
+                attribute >>= 4 * ((coarse_y >> 1) & 1);
+                attribute >>= 2 * ((coarse_x >> 1) & 1);
+                attribute &= 0b11;
+
+                uint8_t tile = context.nes->ppu_bus.read(
+                    nes::ppu_t::get_tile_addr(
+                        nametable,
+                        coarse_x,
+                        coarse_y),
+                    true);
+
+                uint8_t pattern_lo = context.nes->ppu_bus.read(
+                    nes::ppu_t::get_pattern_lo_addr(
+                        context.nes->ppu.ppuctrl.bg_pattern_table_addr,
+                        tile,
+                        fine_y),
+                    true);
+                uint8_t pattern_hi = context.nes->ppu_bus.read(
+                    nes::ppu_t::get_pattern_hi_addr(
+                        context.nes->ppu.ppuctrl.bg_pattern_table_addr,
+                        tile,
+                        fine_y),
+                    true);
+                pattern_lo = nes::ppu_t::reverse_bits(pattern_lo);
+                pattern_hi = nes::ppu_t::reverse_bits(pattern_hi);
+
+                for (uint8_t fine_x = 0; fine_x < 8; fine_x++)
+                {
+                    uint8_t pattern = ((pattern_lo >> fine_x) & 1)
+                        | (((pattern_hi >> fine_x) & 1) << 1);
+
+                    context.debug_nametable[i++] = context.nes->ppu_bus.read(
+                        nes::ppu_t::get_palette_addr(
+                            0,
+                            attribute,
+                            pattern),
+                        true);
+                }
+            }
+        }
+
+        for (uint8_t block_y = 0; block_y < 16; block_y++)
+        for (uint8_t nametable_x = 0; nametable_x < 2; nametable_x++)
+        {
+            uint8_t nametable = nametable_y * 2 + nametable_x;
+            for (uint8_t block_x = 0; block_x < 16; block_x++)
+            {
+                uint8_t attribute = context.nes->ppu_bus.read(
+                    nes::ppu_t::get_attribute_addr(
+                        nametable,
+                        block_x * 2,
+                        block_y * 2),
+                    true);
+                attribute >>= 4 * (block_y & 1);
+                attribute >>= 2 * (block_x & 1);
+                attribute &= 0b11;
+                for (uint8_t pattern = 0; pattern < 4; pattern++)
+                for (uint8_t repeat_x = 0; repeat_x < 4; repeat_x++)
+                {
+                    context.debug_nametable[i++] = context.nes->ppu_bus.read(
+                        nes::ppu_t::get_palette_addr(
+                            0,
+                            attribute,
+                            pattern),
+                        true);
+                }
+            }
+        }
+    }
+
+    WriteTexture(context.debug_nametable_tex, context.debug_nametable);
+    ImGui::Begin("NAMETABLE");
+    ImGui::SetWindowSize({});
+    ImGui::Image(context.debug_nametable_tex, { 512, 512 });
     ImGui::End();
 }
 
@@ -336,6 +623,12 @@ static void handle_key_down(SDL_KeyboardEvent key)
             context.emulation_running = !context.emulation_running;
         }
         break;
+    case SDLK_G:
+        if (ctrl)
+        {
+            context.debug_grid_enable = !context.debug_grid_enable;
+        }
+        break;
     case SDLK_F11:
         context.nes->clock_cpu();
         break;
@@ -382,7 +675,8 @@ int main(int argc, char* argv[])
 
     SDL_WindowFlags window_flags = SDL_WINDOW_RESIZABLE
                                  | SDL_WINDOW_HIDDEN
-                                 | SDL_WINDOW_HIGH_PIXEL_DENSITY;
+                                 | SDL_WINDOW_HIGH_PIXEL_DENSITY
+                                 | SDL_WINDOW_MAXIMIZED;
     context.window = SDL_CreateWindow(
         "NES",
         1280,
@@ -394,9 +688,9 @@ int main(int argc, char* argv[])
         return -1;
     }
 
-    SDL_Renderer* renderer = SDL_CreateRenderer(context.window, nullptr);
-    SDL_SetRenderVSync(renderer, 1);
-    if (renderer == nullptr)
+    context.renderer = SDL_CreateRenderer(context.window, nullptr);
+    SDL_SetRenderVSync(context.renderer, 1);
+    if (context.renderer == nullptr)
     {
         SPDLOG_ERROR("Error: SDL_CreateRenderer(): {}", SDL_GetError());
         return -1;
@@ -407,18 +701,28 @@ int main(int argc, char* argv[])
         SDL_WINDOWPOS_CENTERED);
     SDL_ShowWindow(context.window);
 
-    SDL_Texture* nes_screen_texture = SDL_CreateTexture(
-        renderer,
-        SDL_PIXELFORMAT_RGBA32,
-        SDL_TEXTUREACCESS_STREAMING,
+    SDL_Texture* nes_screen_texture = CreateTexture(
         nes::ppu_t::SCREEN_WIDTH,
         nes::ppu_t::SCREEN_HEIGHT);
     if (nes_screen_texture == nullptr)
     {
-        SPDLOG_ERROR("Error: SDL_CreateTexture(): {}", SDL_GetError());
         return -1;
     }
-    SDL_SetTextureScaleMode(nes_screen_texture, SDL_SCALEMODE_NEAREST);
+
+    if (!(context.debug_nametable_tex = CreateTexture(512, 512)))
+    {
+        return -1;
+    }
+
+    if (!(context.debug_pattern_table_tex = CreateTexture(256, 128)))
+    {
+        return -1;
+    }
+
+    if (!(context.debug_palette_tex = CreateTexture(16, 2)))
+    {
+        return -1;
+    }
 
     // Initialise imgui
 
@@ -427,14 +731,16 @@ int main(int argc, char* argv[])
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
 
-    ImGui_ImplSDL3_InitForSDLRenderer(context.window, renderer);
-    ImGui_ImplSDLRenderer3_Init(renderer);
+    ImGui_ImplSDL3_InitForSDLRenderer(context.window, context.renderer);
+    ImGui_ImplSDLRenderer3_Init(context.renderer);
 
     // Main loop
 
     SPDLOG_INFO("Application initialised");
     bool running = true;
     uint64_t frames_run = SDL_GetTicks() * 60 / 1000;
+    int fps_counter = 0;
+    uint64_t tick_counter = SDL_GetTicks();
     while (running)
     {
         // Process events
@@ -465,62 +771,50 @@ int main(int argc, char* argv[])
 
         // Run emulation
 
-        uint64_t frames_expected = SDL_GetTicks() * 60 / 1000;
+        uint64_t current_ticks = SDL_GetTicks();
+        uint64_t frames_expected = current_ticks * 60 / 1000;
         if (context.emulation_running)
         {
             for (int i = 0; i < 5 && frames_run < frames_expected; i++)
             {
                 context.nes->clock_frame();
                 frames_run++;
+                fps_counter++;
             }
         }
         frames_run = frames_expected;
+        if (current_ticks / 1000 != tick_counter / 1000)
+        {
+            SDL_SetWindowTitle(context.window, fmt::format(
+                "NES - FPS: {}",
+                fps_counter).c_str());
+            fps_counter = 0;
+        }
+        tick_counter = current_ticks;
 
         // Begin rendering
 
         ImGui_ImplSDLRenderer3_NewFrame();
         ImGui_ImplSDL3_NewFrame();
         ImGui::NewFrame();
-        SDL_RenderClear(renderer);
+        SDL_RenderClear(context.renderer);
 
         // Render ImGui
 
         show_cpu_dism();
         show_ram();
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{});
+        show_palette();
+        show_pattern_table();
+        show_nametable();
+        ImGui::PopStyleVar();
 
         // Render NES screen
 
-        void* pixels;
-        int pitch;
-        SDL_LockTexture(nes_screen_texture, nullptr, &pixels, &pitch);
-        for (int y = 0; y < nes::ppu_t::SCREEN_HEIGHT; y++)
-        {
-            uint8_t* row = (uint8_t*)pixels + y * pitch;
-            for (int x = 0; x < nes::ppu_t::SCREEN_WIDTH; x++)
-            {
-                size_t i = y * nes::ppu_t::SCREEN_WIDTH + x;
-                uint8_t colour_index = context.nes->screen_buffer[i];
-                const colour_t& colour = NTSC_PALETTE[colour_index % 64];
-                memcpy(row + (x * 4), &colour, sizeof(colour));
-
-                if (context.enable_debug_grid)
-                {
-                    if ((x + y) % 2 == 0)
-                    {
-                        row[(x * 4)] += 16;
-                        row[(x * 4) + 1] += 16;
-                        row[(x * 4) + 2] += 16;
-                    }
-                    if (x % 8 == 0 || y % 8 == 0)
-                    {
-                        row[(x * 4)] += 16;
-                        row[(x * 4) + 1] += 16;
-                        row[(x * 4) + 2] += 16;
-                    }
-                }
-            }
-        }
-        SDL_UnlockTexture(nes_screen_texture);
+        WriteTexture(
+            nes_screen_texture,
+            context.nes->screen_buffer,
+            context.debug_grid_enable);
 
         int window_width, window_height;
         SDL_GetWindowSize(context.window, &window_width, &window_height);
@@ -534,7 +828,7 @@ int main(int argc, char* argv[])
                 (float)window_width,
                 new_height,
             };
-            SDL_RenderTexture(renderer, nes_screen_texture, nullptr, &dst_rect);
+            SDL_RenderTexture(context.renderer, nes_screen_texture, nullptr, &dst_rect);
         }
         else
         {
@@ -545,14 +839,14 @@ int main(int argc, char* argv[])
                 new_width,
                 (float)window_height,
             };
-            SDL_RenderTexture(renderer, nes_screen_texture, nullptr, &dst_rect);
+            SDL_RenderTexture(context.renderer, nes_screen_texture, nullptr, &dst_rect);
         }
 
         // End rendering
 
         ImGui::Render();
-        ImGui_ImplSDLRenderer3_RenderDrawData(ImGui::GetDrawData(), renderer);
-        SDL_RenderPresent(renderer);
+        ImGui_ImplSDLRenderer3_RenderDrawData(ImGui::GetDrawData(), context.renderer);
+        SDL_RenderPresent(context.renderer);
     }
 
     SPDLOG_INFO("Application exiting");
@@ -561,7 +855,11 @@ int main(int argc, char* argv[])
     ImGui_ImplSDL3_Shutdown();
     ImGui::DestroyContext();
 
-    SDL_DestroyRenderer(renderer);
+    SDL_DestroyTexture(context.debug_palette_tex);
+    SDL_DestroyTexture(context.debug_pattern_table_tex);
+    SDL_DestroyTexture(context.debug_nametable_tex);
+    SDL_DestroyTexture(nes_screen_texture);
+    SDL_DestroyRenderer(context.renderer);
     SDL_DestroyWindow(context.window);
     SDL_Quit();
 

@@ -11,8 +11,8 @@ namespace nes
         void (cpu_t::*opcode)(void);
         bool (cpu_t::*addr_mode)(void);
         int cycles;
-        const char* opcode_name;
-        const char* addr_mode_name;
+        char opcode_name[4];
+        char addr_mode_name[4];
         int byte_count() const;
     };
 

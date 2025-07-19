@@ -9,8 +9,8 @@ namespace nes
           ppu(ppu_bus, cpu, screen_buffer),
           ppu_clock_count(0),
           screen_buffer{},
-          cpu_bus("CPU"),
-          ppu_bus("PPU")
+          cpu_bus(0xFFFF, "CPU"),
+          ppu_bus(0x3FFF, "PPU")
     {
         cpu_bus.connect_read<&ram_t::read>(&ram);
         cpu_bus.connect_write<&ram_t::write>(&ram);
@@ -33,6 +33,8 @@ namespace nes
         {
             cart->reset();
         }
+        ppu_clock_count = 0;
+        memset(screen_buffer, 0, sizeof(screen_buffer));
     }
 
     void nes_t::clock()

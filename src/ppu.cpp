@@ -30,6 +30,7 @@ namespace nes
     {
         ppu_bus.connect_read<&ppu_t::ppu_read>(this);
         ppu_bus.connect_write<&ppu_t::ppu_write>(this);
+        memset(palette, 0x0F, sizeof(palette));
     }
 
     ppu_t::~ppu_t()
@@ -179,6 +180,7 @@ namespace nes
 
     bool ppu_t::ppu_read(uint16_t addr, uint8_t& value, bool readonly)
     {
+        addr &= 0x3FFF;
         if (addr >= 0x2000 && addr <= 0x3EFF)
         {
             switch (mirroring)
@@ -198,6 +200,11 @@ namespace nes
         }
         else if (addr >= 0x3F00)
         {
+            addr &= 0x1F;
+            if (addr % 4 == 0)
+            {
+                addr = 0;
+            }
             value = palette[addr & 0x1F];
             return true;
         }
@@ -226,7 +233,12 @@ namespace nes
         }
         else if (addr >= 0x3F00)
         {
-            palette[addr & 0x1F] = value;
+            addr &= 0x1F;
+            if (addr % 4 == 0 && addr >= 0x10)
+            {
+                addr &= 0xF;
+            }
+            palette[addr] = value;
             return true;
         }
         return false;
@@ -286,11 +298,11 @@ namespace nes
                 attribute &= 0b11;
                 
                 bool is_fg_palette = false;
-                
-                uint8_t palette_index = pattern
-                    | (attribute << 2)
-                    | (is_fg_palette << 4);
-                uint8_t colour_index = palette[palette_index];
+
+                uint8_t colour_index = ppu_bus->read(
+                    get_palette_addr(is_fg_palette,
+                        attribute,
+                        pattern));
                 screen_buffer[scanline * SCREEN_WIDTH + dot - 1] = colour_index;
             }
 
