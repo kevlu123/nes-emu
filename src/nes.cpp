@@ -8,7 +8,9 @@ namespace nes
         : cpu(cpu_bus),
           ppu(ppu_bus, cpu, screen_buffer),
           ppu_clock_count(0),
-          screen_buffer{}
+          screen_buffer{},
+          cpu_bus("CPU"),
+          ppu_bus("PPU")
     {
         cpu_bus.connect_read<&ram_t::read>(&ram);
         cpu_bus.connect_write<&ram_t::write>(&ram);
@@ -43,6 +45,18 @@ namespace nes
         ppu_clock_count++;
     }
 
+    void nes_t::clock_cpu()
+    {
+        while (cpu.cycles_until_next_instruction == 0)
+        {
+            clock();
+        }
+        while (cpu.cycles_until_next_instruction > 0)
+        {
+            clock();
+        }
+    }
+
     void nes_t::clock_frame()
     {
         do
@@ -71,6 +85,7 @@ namespace nes
         cpu_bus.connect_write<&cart_t::write>(&*this->cart);
         ppu_bus.connect_read<&cart_t::read>(&*this->cart);
         ppu_bus.connect_write<&cart_t::write>(&*this->cart);
+        ppu.mirroring = this->cart->header.mirroring;
         reset();
     }
 }

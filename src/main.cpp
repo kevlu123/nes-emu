@@ -254,18 +254,74 @@ static void show_ram()
     ImGui::End();
 }
 
+static void handle_key_up(SDL_KeyboardEvent key)
+{
+    switch (key.key)
+    {
+    case SDLK_A:
+        context.nes->controller.status[0].left = false;
+        break;
+    case SDLK_D:
+        context.nes->controller.status[0].right = false;
+        break;
+    case SDLK_W:
+        context.nes->controller.status[0].up = false;
+        break;
+    case SDLK_S:
+        context.nes->controller.status[0].down = false;
+        break;
+    case SDLK_COLON:
+        context.nes->controller.status[0].b = false;
+        break;
+    case SDLK_APOSTROPHE:
+        context.nes->controller.status[0].a = false;
+        break;
+    case SDLK_RSHIFT:
+        context.nes->controller.status[0].select = false;
+        break;
+    case SDLK_RETURN:
+        context.nes->controller.status[0].start = false;
+        break;
+    }
+}
+
 static void handle_key_down(SDL_KeyboardEvent key)
 {
     bool ctrl = (key.mod & (SDL_KMOD_LCTRL | SDL_KMOD_RCTRL)) != 0;
     bool alt = (key.mod & (SDL_KMOD_LALT | SDL_KMOD_RALT)) != 0;
     switch (key.key)
     {
+    case SDLK_A:
+        context.nes->controller.status[0].left = true;
+        break;
+    case SDLK_D:
+        context.nes->controller.status[0].right = true;
+        break;
+    case SDLK_W:
+        context.nes->controller.status[0].up = true;
+        break;
+    case SDLK_S:
+        context.nes->controller.status[0].down = true;
+        break;
+    case SDLK_COLON:
+        context.nes->controller.status[0].b = true;
+        break;
+    case SDLK_APOSTROPHE:
+        context.nes->controller.status[0].a = true;
+        break;
+    case SDLK_RSHIFT:
+        context.nes->controller.status[0].select = true;
+        break;
     case SDLK_RETURN:
         if (alt)
         {
             bool is_fullscreen = SDL_GetWindowFlags(context.window)
                 & SDL_WINDOW_FULLSCREEN;
             SDL_SetWindowFullscreen(context.window, !is_fullscreen);
+        }
+        else
+        {
+            context.nes->controller.status[0].start = true;
         }
         break;
     case SDLK_R:
@@ -281,7 +337,7 @@ static void handle_key_down(SDL_KeyboardEvent key)
         }
         break;
     case SDLK_F11:
-        context.nes->clock();
+        context.nes->clock_cpu();
         break;
     }
 }
@@ -378,6 +434,7 @@ int main(int argc, char* argv[])
 
     SPDLOG_INFO("Application initialised");
     bool running = true;
+    uint64_t frames_run = SDL_GetTicks() * 60 / 1000;
     while (running)
     {
         // Process events
@@ -400,15 +457,24 @@ int main(int argc, char* argv[])
             case SDL_EVENT_KEY_DOWN:
                 handle_key_down(event.key);
                 break;
+            case SDL_EVENT_KEY_UP:
+                handle_key_up(event.key);
+                break;
             }
         }
 
         // Run emulation
 
+        uint64_t frames_expected = SDL_GetTicks() * 60 / 1000;
         if (context.emulation_running)
         {
-            context.nes->clock_frame();
+            for (int i = 0; i < 5 && frames_run < frames_expected; i++)
+            {
+                context.nes->clock_frame();
+                frames_run++;
+            }
         }
+        frames_run = frames_expected;
 
         // Begin rendering
 

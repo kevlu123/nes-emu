@@ -2,6 +2,7 @@
 #include "pch.h"
 #include "bus.h"
 #include "cpu.h"
+#include "mirroring.h"
 
 namespace nes
 {
@@ -160,6 +161,7 @@ namespace nes
         int scanline;
         bool is_first_frame;
 
+        mirroring_t mirroring;
         uint8_t nametable[0x800];
         uint8_t palette[0x20];
 

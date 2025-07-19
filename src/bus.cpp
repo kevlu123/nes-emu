@@ -3,8 +3,9 @@
 
 namespace nes
 {
-    bus_t::bus_t()
-        : last_read(0xAA)
+    bus_t::bus_t(std::string name)
+        : last_read(0xAA),
+          name(std::move(name))
     {
     }
 
@@ -43,7 +44,17 @@ namespace nes
                 return last_read;
             }
         }
-        SPDLOG_WARN("No read handler *{:04X}", addr);
+        if (addr == 0xFFFC || addr == 0xFFFD)
+        {
+            SPDLOG_WARN(
+                "({}) No read handler *{:04X} (No cartridge loaded?)",
+                name,
+                addr);
+        }
+        else
+        {
+            SPDLOG_WARN("({}) No read handler *{:04X}", name, addr);
+        }
         return last_read;
     }
 
@@ -56,6 +67,10 @@ namespace nes
                 return;
             }
         }
-        SPDLOG_WARN("No write handler *{:04X} = {:02X}", addr, value);
+        SPDLOG_WARN(
+            "({}) No write handler *{:04X} = {:02X}",
+            name,
+            addr,
+            value);
     }
 }

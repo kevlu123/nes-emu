@@ -63,12 +63,15 @@ namespace nes
 
     cpu_t::cpu_t(bus_t &cpu_bus)
         : cpu_bus(&cpu_bus),
-            status{},
-            ra(0),
-            rx(0),
-            ry(0),
-            sp(0xFD),
-            pc(0)
+          status{},
+          ra(0),
+          rx(0),
+          ry(0),
+          sp(0xFD),
+          pc(0),
+          addr(0),
+          crossed_page(false),
+          cycles_until_next_instruction(0)
     {
         status.i = true;
         status.u = true;
@@ -90,7 +93,7 @@ namespace nes
             push_stack(status.reg);
             status.i = true;
             pc = cpu_bus->read(0xFFFE) | (cpu_bus->read(0xFFFF) << 8);
-            cycles_remaining = 7;
+            cycles_until_next_instruction = 7;
         }
     }
 
@@ -102,18 +105,22 @@ namespace nes
         push_stack(status.reg);
         status.i = true;
         pc = cpu_bus->read(0xFFFA) | (cpu_bus->read(0xFFFB) << 8);
-        cycles_remaining = 8;
+        cycles_until_next_instruction = 8;
     }
 
     
     void cpu_t::clock()
     {
-        uint8_t op = cpu_bus->read(pc);
-        pc++;
-        const instruction_t &instruction = instructions[op];
-        cycles_remaining = instruction.cycles;
-        crossed_page = (this->*instruction.addr_mode)();
-        (this->*instruction.opcode)();
+        if (cycles_until_next_instruction == 0)
+        {
+            uint8_t op = cpu_bus->read(pc);
+            pc++;
+            const instruction_t &instruction = instructions[op];
+            cycles_until_next_instruction = instruction.cycles;
+            crossed_page = (this->*instruction.addr_mode)();
+            (this->*instruction.opcode)();
+        }
+        cycles_until_next_instruction--;
     }
     
     void cpu_t::push_stack(uint8_t value)
@@ -262,7 +269,7 @@ namespace nes
         status.n = res & 0x80;
         status.v = (~(ra ^ data) & (ra ^ res)) & 0x80;
         ra = res;
-        cycles_remaining += crossed_page;
+        cycles_until_next_instruction += crossed_page;
     }
 
     // Bitwise AND
@@ -272,7 +279,7 @@ namespace nes
         ra &= data;
         status.n = ra & 0x80;
         status.z = ra == 0;
-        cycles_remaining += crossed_page;
+        cycles_until_next_instruction += crossed_page;
     }
 
     // Arithmetic shift left (memory)
@@ -302,7 +309,7 @@ namespace nes
         if (!status.c)
         {
             pc = addr;
-            cycles_remaining += crossed_page + 1;
+            cycles_until_next_instruction += crossed_page + 1;
         }
     }
 
@@ -312,7 +319,7 @@ namespace nes
         if (status.c)
         {
             pc = addr;
-            cycles_remaining += crossed_page + 1;
+            cycles_until_next_instruction += crossed_page + 1;
         }
     }
 
@@ -322,7 +329,7 @@ namespace nes
         if (status.z)
         {
             pc = addr;
-            cycles_remaining += crossed_page + 1;
+            cycles_until_next_instruction += crossed_page + 1;
         }
     }
 
@@ -341,7 +348,7 @@ namespace nes
         if (status.n)
         {
             pc = addr;
-            cycles_remaining += crossed_page + 1;
+            cycles_until_next_instruction += crossed_page + 1;
         }
     }
 
@@ -351,7 +358,7 @@ namespace nes
         if (!status.z)
         {
             pc = addr;
-            cycles_remaining += crossed_page + 1;
+            cycles_until_next_instruction += crossed_page + 1;
         }
     }
 
@@ -361,7 +368,7 @@ namespace nes
         if (!status.n)
         {
             pc = addr;
-            cycles_remaining += crossed_page + 1;
+            cycles_until_next_instruction += crossed_page + 1;
         }
     }
 
@@ -382,7 +389,7 @@ namespace nes
         if (!status.v)
         {
             pc = addr;
-            cycles_remaining += crossed_page + 1;
+            cycles_until_next_instruction += crossed_page + 1;
         }
     }
 
@@ -392,7 +399,7 @@ namespace nes
         if (status.v)
         {
             pc = addr;
-            cycles_remaining += crossed_page + 1;
+            cycles_until_next_instruction += crossed_page + 1;
         }
     }
 
@@ -428,7 +435,7 @@ namespace nes
         status.n = res & 0x80;
         status.z = res == 0;
         status.c = ra >= data;
-        cycles_remaining += crossed_page;
+        cycles_until_next_instruction += crossed_page;
     }
 
     // Compare X
@@ -484,7 +491,7 @@ namespace nes
         ra ^= data;
         status.n = ra & 0x80;
         status.z = ra == 0;
-        cycles_remaining += crossed_page;
+        cycles_until_next_instruction += crossed_page;
     }
 
     // Increment memory
@@ -534,7 +541,7 @@ namespace nes
         ra = cpu_bus->read(addr);
         status.z = ra == 0;
         status.n = ra & 0x80;
-        cycles_remaining += crossed_page;
+        cycles_until_next_instruction += crossed_page;
     }
 
     // Load X
@@ -543,7 +550,7 @@ namespace nes
         rx = cpu_bus->read(addr);
         status.z = rx == 0;
         status.n = rx & 0x80;
-        cycles_remaining += crossed_page;
+        cycles_until_next_instruction += crossed_page;
     }
 
     // Load Y
@@ -552,7 +559,7 @@ namespace nes
         ry = cpu_bus->read(addr);
         status.z = ry == 0;
         status.n = ry & 0x80;
-        cycles_remaining += crossed_page;
+        cycles_until_next_instruction += crossed_page;
     }
 
     // Logical shift left (memory)
@@ -588,7 +595,7 @@ namespace nes
         ra |= data;
         status.n = ra & 0x80;
         status.z = ra == 0;
-        cycles_remaining += crossed_page;
+        cycles_until_next_instruction += crossed_page;
     }
 
     // Push A
@@ -690,7 +697,7 @@ namespace nes
         status.n = res & 0x80;
         status.v = (~(ra ^ data) & (ra ^ res)) & 0x80;
         ra = res;
-        cycles_remaining += crossed_page;
+        cycles_until_next_instruction += crossed_page;
     }
 
     // Set carry

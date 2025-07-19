@@ -70,10 +70,10 @@ namespace nes
         opcode_fn AAC, SAX, ARR, ASR, ATX, AXA, AXS, DCP, DOP, ISB, KIL;
         opcode_fn LAR, LAX, RLA, RRA, SLO, SRE, SXA, SYA, TOP, XAA, XAS;
 
+        int cycles_until_next_instruction;
     private:
         bus_t* cpu_bus;
         uint16_t addr;
         bool crossed_page;
-        int cycles_remaining = 0;
     };
 }

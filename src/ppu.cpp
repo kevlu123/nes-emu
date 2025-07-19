@@ -24,6 +24,7 @@ namespace nes
           pattern_hi_read(0),
           pattern_lo_read_shift_reg(0),
           pattern_hi_read_shift_reg(0),
+          mirroring(mirroring_t::horizontal),
           nametable{},
           palette{}
     {
@@ -63,7 +64,7 @@ namespace nes
         else if (addr == 0x2004)
         {
             // OAMDATA
-            SPDLOG_WARN("OAMDATA read stubbed");
+            // SPDLOG_WARN("OAMDATA read stubbed");
             value = 0;
             return true;
         }
@@ -118,13 +119,13 @@ namespace nes
         else if (addr == 0x2003)
         {
             // OAMADDR
-            SPDLOG_WARN("OAMADDR write stubbed");
+            // SPDLOG_WARN("OAMADDR write stubbed");
             return true;
         }
         else if (addr == 0x2004)
         {
             // OAMDATA
-            SPDLOG_WARN("OAMDATA write stubbed");
+            // SPDLOG_WARN("OAMDATA write stubbed");
             return true;
         }
         else if (addr == 0x2005)
@@ -170,7 +171,7 @@ namespace nes
         else if (addr == 0x4014)
         {
             // OAMDMA
-            SPDLOG_WARN("OAMDMA write stubbed");
+            // SPDLOG_WARN("OAMDMA write stubbed");
             return true;
         }
         return false;
@@ -178,9 +179,21 @@ namespace nes
 
     bool ppu_t::ppu_read(uint16_t addr, uint8_t& value, bool readonly)
     {
-        if (addr >= 0x2000 && addr <= 0x2FFF)
+        if (addr >= 0x2000 && addr <= 0x3EFF)
         {
-            value = nametable[addr & 0x7FF];
+            switch (mirroring)
+            {
+            case mirroring_t::horizontal:
+                value = nametable[(addr & 0x3FF) | ((addr & 0x800) ? 0x400 : 0)];
+                break;
+            case mirroring_t::vertical:
+                value = nametable[addr & 0x7FF];
+                break;
+            default:
+                SPDLOG_WARN("Mirroring {} not implemented", (int)mirroring);
+                value = nametable[addr & 0x7FF];
+                break;
+            }
             return true;
         }
         else if (addr >= 0x3F00)
@@ -193,8 +206,21 @@ namespace nes
 
     bool ppu_t::ppu_write(uint16_t addr, uint8_t value)
     {
-        if (addr >= 0x2000 && addr <= 0x2FFF)
+        if (addr >= 0x2000 && addr <= 0x3EFF)
         {
+            switch (mirroring)
+            {
+            case mirroring_t::horizontal:
+                nametable[(addr & 0x3FF) | ((addr & 0x800) ? 0x400 : 0)] = value;
+                break;
+            case mirroring_t::vertical:
+                nametable[addr & 0x7FF] = value;
+                break;
+            default:
+                SPDLOG_WARN("Mirroring {} not implemented", (int)mirroring);
+                nametable[addr & 0x7FF] = value;
+                break;
+            }
             nametable[addr & 0x7FF] = value;
             return true;
         }
@@ -265,11 +291,6 @@ namespace nes
                     | (attribute << 2)
                     | (is_fg_palette << 4);
                 uint8_t colour_index = palette[palette_index];
-                if (colour_index)
-                {
-                    volatile int i = 0;
-                    i = 1;
-                }
                 screen_buffer[scanline * SCREEN_WIDTH + dot - 1] = colour_index;
             }
 
