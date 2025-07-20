@@ -95,15 +95,13 @@ namespace nes
             // PPUCTRL
             if (!is_first_frame)
             {
+                bool vblank_nmi_enable = ppuctrl.vblank_nmi_enable;
+                ppuctrl.reg = value;
+                t_vram_addr.nametable_select = value & 0b11;
                 if (ppustatus.vblank &&
-                    !ppuctrl.vblank_nmi_enable && (value & 0x80) != 0)
+                    !vblank_nmi_enable && ppuctrl.vblank_nmi_enable)
                 {
-                    ppuctrl.reg = value;
                     cpu->nmi();
-                }
-                else
-                {
-                    ppuctrl.reg = value;
                 }
             }
             return true;
@@ -180,7 +178,6 @@ namespace nes
 
     bool ppu_t::ppu_read(uint16_t addr, uint8_t& value, bool readonly)
     {
-        addr &= 0x3FFF;
         if (addr >= 0x2000 && addr <= 0x3EFF)
         {
             switch (mirroring)
@@ -228,7 +225,6 @@ namespace nes
                 nametable[addr & 0x7FF] = value;
                 break;
             }
-            nametable[addr & 0x7FF] = value;
             return true;
         }
         else if (addr >= 0x3F00)
@@ -246,7 +242,8 @@ namespace nes
 
     void ppu_t::clock()
     {
-        bool rendering_enabled = ppumask.enable_bg || ppumask.enable_sprite;
+        bool rendering_enabled = (ppumask.enable_bg || ppumask.enable_sprite)
+            && (scanline < SCREEN_HEIGHT || scanline == SCANLINES - 1);
 
         if (dot == 256 && rendering_enabled)
         {
@@ -284,21 +281,21 @@ namespace nes
             uint8_t pattern =
                 ((pattern_lo_read_shift_reg >> x_scroll.value) & 1)
                 | (((pattern_hi_read_shift_reg >> x_scroll.value) & 1) << 1);
+            uint8_t attribute = ((attribute_lo_read_shift_reg >> x_scroll.value) & 1)
+                | (((attribute_hi_read_shift_reg >> x_scroll.value) & 1) << 1);
 
             pattern_lo_read_shift_reg >>= 1;
             pattern_lo_read_shift_reg |= 0x8000;
             pattern_hi_read_shift_reg >>= 1;
             pattern_hi_read_shift_reg |= 0x8000;
+            attribute_lo_read_shift_reg >>= 1;
+            attribute_lo_read_shift_reg |= attribute_lo_latch * 0x80;
+            attribute_hi_read_shift_reg >>= 1;
+            attribute_hi_read_shift_reg |= attribute_hi_latch * 0x80;
 
             if (dot >= 1 && dot <= 256 && scanline < SCREEN_HEIGHT)
             {
-                uint8_t attribute = attribute_read;
-                attribute >>= 4 * ((v_vram_addr.coarse_y_scroll >> 1) & 1);
-                attribute >>= 2 * ((v_vram_addr.coarse_x_scroll >> 1) & 1);
-                attribute &= 0b11;
-                
                 bool is_fg_palette = false;
-
                 uint8_t colour_index = ppu_bus->read(
                     get_palette_addr(is_fg_palette,
                         attribute,
@@ -328,6 +325,7 @@ namespace nes
                 pattern_lo_read = reverse_bits(pattern_lo_read);
                 break;
             case 0:
+            {
                 pattern_hi_read = ppu_bus->read(
                     get_pattern_hi_addr(ppuctrl.bg_pattern_table_addr,
                         nametable_read,
@@ -335,7 +333,15 @@ namespace nes
                 pattern_hi_read = reverse_bits(pattern_hi_read);
                 pattern_lo_read_shift_reg &= 0xFF | (pattern_lo_read << 8);
                 pattern_hi_read_shift_reg &= 0xFF | (pattern_hi_read << 8);
+
+                uint8_t attribute = get_attribute(
+                    attribute_read,
+                    v_vram_addr.coarse_x_scroll,
+                    v_vram_addr.coarse_y_scroll);
+                attribute_lo_latch = attribute & 1;
+                attribute_hi_latch = (attribute >> 1) & 1;
                 break;
+            }
             }
         }
 
@@ -361,6 +367,13 @@ namespace nes
             {
                 cpu->nmi();
             }
+        }
+
+        if (dot == 0 && scanline == SCANLINES - 1)
+        {
+            ppustatus.vblank = 0;
+            ppustatus.sprite_zero_hit = 0;
+            ppustatus.sprite_overflow = 0;
         }
 
         dot++;

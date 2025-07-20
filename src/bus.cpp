@@ -46,18 +46,25 @@ namespace nes
                 return last_read;
             }
         }
-        if (addr == 0xFFFC || addr == 0xFFFD)
+        if (readonly)
         {
-            SPDLOG_WARN(
-                "({}) No read handler *{:04X} (No cartridge loaded?)",
-                name,
-                addr);
+            return 0;
         }
         else
         {
-            SPDLOG_WARN("({}) No read handler *{:04X}", name, addr);
+            if (addr == 0xFFFC || addr == 0xFFFD)
+            {
+                SPDLOG_WARN(
+                    "({}) No read handler *{:04X} (No cartridge loaded?)",
+                    name,
+                    addr);
+            }
+            else
+            {
+                SPDLOG_WARN("({}) No read handler *{:04X}", name, addr);
+            }
+            return last_read;
         }
-        return last_read;
     }
 
     void bus_t::write(uint16_t addr, uint8_t value)

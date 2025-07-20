@@ -464,9 +464,10 @@ static void show_nametable()
                         coarse_x,
                         coarse_y),
                     true);
-                attribute >>= 4 * ((coarse_y >> 1) & 1);
-                attribute >>= 2 * ((coarse_x >> 1) & 1);
-                attribute &= 0b11;
+                attribute = nes::ppu_t::get_attribute(
+                    attribute,
+                    coarse_x,
+                    coarse_y);
 
                 uint8_t tile = context.nes->ppu_bus.read(
                     nes::ppu_t::get_tile_addr(
@@ -517,9 +518,10 @@ static void show_nametable()
                         block_x * 2,
                         block_y * 2),
                     true);
-                attribute >>= 4 * (block_y & 1);
-                attribute >>= 2 * (block_x & 1);
-                attribute &= 0b11;
+                attribute = nes::ppu_t::get_attribute(
+                    attribute,
+                    block_x * 2,
+                    block_y * 2);
                 for (uint8_t pattern = 0; pattern < 4; pattern++)
                 for (uint8_t repeat_x = 0; repeat_x < 4; repeat_x++)
                 {

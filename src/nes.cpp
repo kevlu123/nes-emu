@@ -34,7 +34,7 @@ namespace nes
             cart->reset();
         }
         ppu_clock_count = 0;
-        memset(screen_buffer, 0, sizeof(screen_buffer));
+        memset(screen_buffer, 0x0F, sizeof(screen_buffer));
     }
 
     void nes_t::clock()

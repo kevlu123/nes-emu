@@ -43,8 +43,16 @@ namespace nes
             uint8_t coarse_x, uint8_t coarse_y)
         {
             return get_attribute_table_addr(nametable)
-                + ((coarse_y >> 2) & 0b111) * 8
-                + ((coarse_x >> 2) & 0b111);
+                + (((coarse_y & 0b11111) >> 2) & 0b111) * 8
+                + (((coarse_x & 0b11111) >> 2) & 0b111);
+        }
+
+        static constexpr uint8_t get_attribute(uint8_t attribute,
+            uint8_t coarse_x, uint8_t coarse_y)
+        {
+            attribute >>= 4 * (((coarse_y & 0b11111) >> 1) & 1);
+            attribute >>= 2 * (((coarse_x & 0b11111) >> 1) & 1);
+            return attribute & 0b11;
         }
 
         static constexpr uint16_t get_tile_addr(
@@ -163,6 +171,10 @@ namespace nes
 
         uint8_t nametable_read;
         uint8_t attribute_read;
+        bool attribute_lo_latch;
+        bool attribute_hi_latch;
+        uint8_t attribute_lo_read_shift_reg;
+        uint8_t attribute_hi_read_shift_reg;
         uint8_t pattern_lo_read;
         uint8_t pattern_hi_read;
         uint16_t pattern_lo_read_shift_reg;
