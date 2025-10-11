@@ -543,6 +543,43 @@ static void show_nametable()
     ImGui::End();
 }
 
+static void show_sprites()
+{
+    ImGui::Begin("OAM");
+    ImGui::SetWindowSize({ 0, 640 });
+    if (context.nes->ppu.ppuctrl.sprite_size == 0)
+    {
+        ImGui::Text("    RAW             I  X  Y  PL PR FH FV");
+        for (size_t i = 0; i < 64; i += 8)
+        {
+            ImGui::Text("");
+            for (size_t j = 0; j < 8; j++)
+            {
+                auto& oam = context.nes->ppu.oam[i + j];
+                ImVec4 colour = oam.y < 0xEF
+                    ? ImVec4(1.0f, 1.0f, 1.0f, 1.0f)
+                    : ImVec4(0.7f, 0.7f, 0.7f, 1.0f);
+                ImGui::TextColored(
+                    colour,
+                    "%02X: %02X %02X %02X %02X     %02X %02X %02X %d  %c  %c  %c",
+                    i + j,
+                    context.nes->ppu.oam_bytes[(i + j) * 4],
+                    context.nes->ppu.oam_bytes[(i + j) * 4 + 1],
+                    context.nes->ppu.oam_bytes[(i + j) * 4 + 2],
+                    context.nes->ppu.oam_bytes[(i + j) * 4 + 3],
+                    oam.tile_index,
+                    oam.x,
+                    oam.y,
+                    oam.palette + 4,
+                    oam.priority ? 'X' : '.',
+                    oam.flip_horizontally ? 'X' : '.',
+                    oam.flip_vertically ? 'X' : '.');
+            }
+        }
+    }
+    ImGui::End();
+}
+
 static void handle_key_up(SDL_KeyboardEvent key)
 {
     switch (key.key)
@@ -805,6 +842,7 @@ int main(int argc, char* argv[])
 
         show_cpu_dism();
         show_ram();
+        show_sprites();
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{});
         show_palette();
         show_pattern_table();

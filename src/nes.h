@@ -7,6 +7,7 @@
 #include "apu.h"
 #include "controller.h"
 #include "cart.h"
+#include "oam_dma.h"
 
 #include <optional>
 
@@ -29,6 +30,7 @@ namespace nes
         cpu_t cpu;
         ppu_t ppu;
         apu_t apu;
+        oam_dma_t oam_dma;
         controller_t controller;
         std::optional<cart_t> cart;
 

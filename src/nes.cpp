@@ -6,7 +6,8 @@ namespace nes
 {
     nes_t::nes_t()
         : cpu(cpu_bus),
-          ppu(ppu_bus, cpu, screen_buffer),
+          ppu(ppu_bus, cpu, oam_dma, screen_buffer),
+          oam_dma(cpu_bus),
           ppu_clock_count(0),
           screen_buffer{},
           cpu_bus(0xFFFF, "CPU"),
@@ -28,6 +29,7 @@ namespace nes
         cpu.reset();
         ppu.reset();
         apu.reset();
+        oam_dma.reset();
         controller.reset();
         if (cart)
         {
@@ -41,7 +43,11 @@ namespace nes
     {
         if (ppu_clock_count % 3 == 0)
         {
-            cpu.clock();
+            if (oam_dma.cycles_remaining == 0)
+            {
+                cpu.clock();
+            }
+            oam_dma.clock();
         }
         ppu.clock();
         ppu_clock_count++;

@@ -3,9 +3,10 @@
 
 namespace nes
 {
-    ppu_t::ppu_t(bus_t& ppu_bus, cpu_t& cpu, uint8_t* screen_buffer)
+    ppu_t::ppu_t(bus_t& ppu_bus, cpu_t& cpu, oam_dma_t& oam_dma, uint8_t* screen_buffer)
         : ppu_bus(&ppu_bus),
           cpu(&cpu),
+          oam_dma(&oam_dma),
           screen_buffer(screen_buffer),
           ppuctrl{},
           ppumask{},
@@ -15,6 +16,7 @@ namespace nes
           x_scroll{},
           write_toggle(false),
           ppudata_read_buffer(0),
+          oam_addr(0),
           dot(0),
           scanline(0),
           is_first_frame(true),
@@ -26,7 +28,8 @@ namespace nes
           pattern_hi_read_shift_reg(0),
           mirroring(mirroring_t::horizontal),
           nametable{},
-          palette{}
+          palette{},
+          oam_bytes{}
     {
         ppu_bus.connect_read<&ppu_t::ppu_read>(this);
         ppu_bus.connect_write<&ppu_t::ppu_write>(this);
@@ -41,7 +44,7 @@ namespace nes
 
     void ppu_t::reset()
     {
-        *this = ppu_t(*ppu_bus, *cpu, screen_buffer);
+        *this = ppu_t(*ppu_bus, *cpu, *oam_dma, screen_buffer);
     }
     
     bool ppu_t::cpu_read(uint16_t addr, uint8_t& value, bool readonly)
@@ -65,8 +68,7 @@ namespace nes
         else if (addr == 0x2004)
         {
             // OAMDATA
-            // SPDLOG_WARN("OAMDATA read stubbed");
-            value = 0;
+            value = oam_bytes[oam_addr];
             return true;
         }
         else if (addr == 0x2007)
@@ -118,13 +120,14 @@ namespace nes
         else if (addr == 0x2003)
         {
             // OAMADDR
-            // SPDLOG_WARN("OAMADDR write stubbed");
+            oam_addr = value;
             return true;
         }
         else if (addr == 0x2004)
         {
             // OAMDATA
-            // SPDLOG_WARN("OAMDATA write stubbed");
+            oam_bytes[oam_addr] = value;
+            oam_addr++;
             return true;
         }
         else if (addr == 0x2005)
@@ -170,7 +173,7 @@ namespace nes
         else if (addr == 0x4014)
         {
             // OAMDMA
-            // SPDLOG_WARN("OAMDMA write stubbed");
+            oam_dma->copy(value);
             return true;
         }
         return false;

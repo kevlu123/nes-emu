@@ -3,9 +3,25 @@
 #include "bus.h"
 #include "cpu.h"
 #include "mirroring.h"
+#include "oam_dma.h"
 
 namespace nes
 {
+    struct oam_t
+    {
+        uint8_t y;
+        uint8_t tile_index;
+        struct
+        {
+            uint8_t palette : 2;
+            uint8_t unused : 3;
+            uint8_t priority : 1;
+            uint8_t flip_horizontally : 1;
+            uint8_t flip_vertically : 1;
+        };
+        uint8_t x;
+    };
+
     struct ppu_t
     {
         static constexpr int SCREEN_WIDTH = 256;
@@ -15,7 +31,7 @@ namespace nes
         static constexpr int SCANLINES = 262;
         static constexpr int DOTS_PER_SCANLINE = 341;
 
-        ppu_t(bus_t& ppu_bus, cpu_t& cpu, uint8_t* screen_buffer);
+        ppu_t(bus_t& ppu_bus, cpu_t& cpu, oam_dma_t& oam_dma, uint8_t* screen_buffer);
         ~ppu_t();
         void reset();
         bool cpu_read(uint16_t addr, uint8_t& value, bool readonly);
@@ -180,6 +196,8 @@ namespace nes
         uint16_t pattern_lo_read_shift_reg;
         uint16_t pattern_hi_read_shift_reg;
 
+        uint8_t oam_addr;
+
         int dot;
         int scanline;
         bool is_first_frame;
@@ -187,10 +205,16 @@ namespace nes
         mirroring_t mirroring;
         uint8_t nametable[0x800];
         uint8_t palette[0x20];
+        union
+        {
+            uint8_t oam_bytes[256];
+            oam_t oam[64];
+        };
 
     private:
         bus_t* ppu_bus;
         cpu_t* cpu;
+        oam_dma_t* oam_dma;
         uint8_t* screen_buffer;
     };
 }
