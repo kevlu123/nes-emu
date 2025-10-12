@@ -89,6 +89,7 @@ static struct
     SDL_Renderer* renderer = nullptr;
     std::unique_ptr<nes::nes_t> nes;
     bool emulation_running = true;
+    int emulation_speed = 1;
 
     SDL_Texture* debug_palette_tex = nullptr;
     SDL_Texture* debug_pattern_table_tex = nullptr;
@@ -596,7 +597,7 @@ static void handle_key_up(SDL_KeyboardEvent key)
     case SDLK_S:
         context.nes->controller.status[0].down = false;
         break;
-    case SDLK_COLON:
+    case SDLK_SEMICOLON:
         context.nes->controller.status[0].b = false;
         break;
     case SDLK_APOSTROPHE:
@@ -629,7 +630,7 @@ static void handle_key_down(SDL_KeyboardEvent key)
     case SDLK_S:
         context.nes->controller.status[0].down = true;
         break;
-    case SDLK_COLON:
+    case SDLK_SEMICOLON:
         context.nes->controller.status[0].b = true;
         break;
     case SDLK_APOSTROPHE:
@@ -670,6 +671,18 @@ static void handle_key_down(SDL_KeyboardEvent key)
         break;
     case SDLK_F11:
         context.nes->clock_cpu();
+        break;
+    case SDLK_1:
+        if (ctrl)
+        {
+            context.emulation_speed = 1;
+        }
+        break;
+    case SDLK_2:
+        if (ctrl)
+        {
+            context.emulation_speed = 2;
+        }
         break;
     }
 }
@@ -816,7 +829,10 @@ int main(int argc, char* argv[])
         {
             for (int i = 0; i < 5 && frames_run < frames_expected; i++)
             {
-                context.nes->clock_frame();
+                for (int j = 0; j < context.emulation_speed; j++)
+                {
+                    context.nes->clock_frame();
+                }
                 frames_run++;
                 fps_counter++;
             }

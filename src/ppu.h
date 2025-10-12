@@ -205,11 +205,26 @@ namespace nes
         mirroring_t mirroring;
         uint8_t nametable[0x800];
         uint8_t palette[0x20];
+
         union
         {
             uint8_t oam_bytes[256];
             oam_t oam[64];
         };
+        union
+        {
+            uint8_t secondary_oam_bytes[32];
+            oam_t secondary_oam[8];
+        };
+        uint8_t secondary_oam_count;
+        struct
+        {
+            uint8_t x;
+            uint8_t pattern_lo;
+            uint8_t pattern_hi;
+            uint8_t attribute;
+            uint8_t priority;
+        } sprite_output[8];
 
     private:
         bus_t* ppu_bus;

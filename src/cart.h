@@ -53,6 +53,7 @@ namespace nes
         ines_header_t header;
         std::vector<uint8_t> rom;
         std::span<uint8_t> prg_rom;
-        std::span<uint8_t> chr_rom;
+        std::span<uint8_t> chr;
+        std::vector<uint8_t> chr_ram;
     };
 }

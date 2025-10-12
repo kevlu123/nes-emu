@@ -29,7 +29,10 @@ namespace nes
           mirroring(mirroring_t::horizontal),
           nametable{},
           palette{},
-          oam_bytes{}
+          oam_bytes{},
+          secondary_oam_bytes{},
+          secondary_oam_count(0),
+          sprite_output{}
     {
         ppu_bus.connect_read<&ppu_t::ppu_read>(this);
         ppu_bus.connect_write<&ppu_t::ppu_write>(this);
@@ -68,7 +71,14 @@ namespace nes
         else if (addr == 0x2004)
         {
             // OAMDATA
-            value = oam_bytes[oam_addr];
+            if (dot >= 1 && dot <= 64 && scanline < SCREEN_HEIGHT)
+            {
+                value = 0xFF;
+            }
+            else
+            {
+                value = oam_bytes[oam_addr];
+            }
             return true;
         }
         else if (addr == 0x2007)
@@ -248,6 +258,88 @@ namespace nes
         bool rendering_enabled = (ppumask.enable_bg || ppumask.enable_sprite)
             && (scanline < SCREEN_HEIGHT || scanline == SCANLINES - 1);
 
+        if (dot % 2 == 0 && dot >= 1 && dot <= 64 && scanline < SCREEN_HEIGHT)
+        {
+            secondary_oam_bytes[dot / 2 - 1] = 0xFF;
+        }
+        
+        if (dot == 257 && scanline < SCREEN_HEIGHT)
+        {
+            secondary_oam_count = 0;
+            int sprite_size = ppuctrl.sprite_size ? 16 : 8;
+            for (int n = 0; n < 64; n++)
+            {
+                int oam_y = oam[n].y;
+                secondary_oam[secondary_oam_count].y = oam_y;
+                if (oam_y < 239 && scanline >= oam_y && scanline < oam_y + sprite_size)
+                {
+                    secondary_oam[secondary_oam_count] = oam[n];
+                    secondary_oam_count++;
+                    if (secondary_oam_count >= 8)
+                    {
+                        for (int m = 0; n < 64; n++)
+                        {
+                            oam_y = oam_bytes[(n * 4) + m];
+                            if (scanline >= oam_y && scanline < oam_y + sprite_size)
+                            {
+                                ppustatus.sprite_overflow = 1;
+                                n++;
+                            }
+                            else
+                            {
+                                m = (m + 1) % 4;
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+
+            uint8_t tile_mask = sprite_size == 16 ? 0xFE : 0xFF;
+            std::memset(sprite_output, 0xFF, sizeof(sprite_output));
+            for (int i = 0; i < secondary_oam_count; i++)
+            {
+                const oam_t& oam = secondary_oam[i];
+                auto& output = sprite_output[i];
+                output.attribute = oam.palette;
+                output.priority = oam.priority;
+                output.x = oam.x;
+                int fine_y = scanline - oam.y;
+                if (oam.flip_vertically)
+                {
+                    fine_y = sprite_size - fine_y - 1;
+                }
+                uint8_t pattern_table = sprite_size == 16 ? oam.tile_index & 1 : ppuctrl.sprite8x8_table_addr;
+                if (fine_y < 8)
+                {
+                    output.pattern_lo = ppu_bus->read(
+                        get_pattern_lo_addr(pattern_table,
+                            oam.tile_index & tile_mask,
+                            fine_y));
+                    output.pattern_hi = ppu_bus->read(
+                        get_pattern_hi_addr(pattern_table,
+                            oam.tile_index & tile_mask,
+                            fine_y));
+                }
+                else
+                {
+                    output.pattern_lo = ppu_bus->read(
+                        get_pattern_lo_addr(pattern_table,
+                            oam.tile_index + 1,
+                            fine_y - 8));
+                    output.pattern_hi = ppu_bus->read(
+                        get_pattern_hi_addr(pattern_table,
+                            oam.tile_index + 1,
+                            fine_y - 8));
+                }
+                if (oam.flip_horizontally)
+                {
+                    output.pattern_lo = reverse_bits(output.pattern_lo);
+                    output.pattern_hi = reverse_bits(output.pattern_hi);
+                }
+            }
+        }
+
         if (dot == 256 && rendering_enabled)
         {
             v_vram_addr.fine_y_scroll++;
@@ -281,11 +373,15 @@ namespace nes
         if (((dot >= 1 && dot <= 256) || (dot >= 321 && dot <= 336))
             && rendering_enabled)
         {
-            uint8_t pattern =
-                ((pattern_lo_read_shift_reg >> x_scroll.value) & 1)
-                | (((pattern_hi_read_shift_reg >> x_scroll.value) & 1) << 1);
-            uint8_t attribute = ((attribute_lo_read_shift_reg >> x_scroll.value) & 1)
-                | (((attribute_hi_read_shift_reg >> x_scroll.value) & 1) << 1);
+            uint8_t bg_pattern = 0;
+            uint8_t bg_attribute = 0;
+            if (ppumask.enable_bg && !(ppumask.show_bg_left8 == 0 && dot <= 8))
+            {
+                bg_pattern = ((pattern_lo_read_shift_reg >> x_scroll.value) & 1)
+                    | (((pattern_hi_read_shift_reg >> x_scroll.value) & 1) << 1);
+                bg_attribute = ((attribute_lo_read_shift_reg >> x_scroll.value) & 1)
+                    | (((attribute_hi_read_shift_reg >> x_scroll.value) & 1) << 1);
+            }
 
             pattern_lo_read_shift_reg >>= 1;
             pattern_lo_read_shift_reg |= 0x8000;
@@ -298,11 +394,48 @@ namespace nes
 
             if (dot >= 1 && dot <= 256 && scanline < SCREEN_HEIGHT)
             {
-                bool is_fg_palette = false;
+                uint8_t fg_pattern = 0;
+                uint8_t fg_attribute = 0;
+                bool back_priority = false;
+                bool found_sprite = false;
+                bool sprite_zero_opaque = false;
+                for (int i = 0; i < secondary_oam_count; i++)
+                {
+                    auto& sprite = sprite_output[i];
+                    if (dot - 1 >= sprite.x && dot - 1 < sprite.x + 8)
+                    {
+                        int pattern = ((sprite.pattern_hi >> 7) << 1) | (sprite.pattern_lo >> 7);
+                        if (!found_sprite && ppumask.enable_sprite && !(ppumask.show_sprite_left8 == 0 && dot <= 8))
+                        {
+                            if (i == 0)
+                            {
+                                sprite_zero_opaque = pattern != 0;
+                            }
+                            if (pattern != 0)
+                            {
+                                found_sprite = true;
+                                back_priority = sprite.priority;
+                                fg_attribute = sprite.attribute;
+                                fg_pattern = pattern;
+                            }
+                        }
+                        sprite.pattern_hi <<= 1;
+                        sprite.pattern_lo <<= 1;
+                    }
+                }
+
+                if (ppustatus.sprite_zero_hit == 0 && sprite_zero_opaque && bg_pattern != 0 && dot - 1 < 255)
+                {
+                    ppustatus.sprite_zero_hit = 1;
+                }
+
+                bool is_fg_palette = found_sprite && ((fg_pattern != 0 && !back_priority) || bg_pattern == 0);
+                uint8_t final_pattern = is_fg_palette ? fg_pattern : bg_pattern;
+                uint8_t final_attribute = is_fg_palette ? fg_attribute : bg_attribute;
                 uint8_t colour_index = ppu_bus->read(
                     get_palette_addr(is_fg_palette,
-                        attribute,
-                        pattern));
+                        final_attribute,
+                        final_pattern));
                 screen_buffer[scanline * SCREEN_WIDTH + dot - 1] = colour_index;
             }
 
@@ -372,7 +505,7 @@ namespace nes
             }
         }
 
-        if (dot == 0 && scanline == SCANLINES - 1)
+        if (dot == 1 && scanline == SCANLINES - 1)
         {
             ppustatus.vblank = 0;
             ppustatus.sprite_zero_hit = 0;

@@ -50,7 +50,15 @@ namespace nes
             SPDLOG_ERROR("Invalid ROM: CHR ROM too short");
             return false;
         }
-        cart.chr_rom = std::span<uint8_t>(rom.data() + i, chr_size);
+        if (cart.header.chr_chunks == 0)
+        {
+            cart.chr_ram.resize(0x2000);
+            cart.chr = std::span<uint8_t>(cart.chr_ram);
+        }
+        else
+        {
+            cart.chr = std::span<uint8_t>(rom.data() + i, chr_size);
+        }
         i += chr_size;
 
         cart.rom = std::move(rom);
@@ -68,6 +76,7 @@ namespace nes
                     cart.header.has_persistent_storage ? "Yes" : "No");
         SPDLOG_INFO("    PRG RAM size: {}KB",
                     cart.header.prg_ram_size * 8);
+        return true;
     }
 
     void cart_t::reset()
@@ -78,7 +87,7 @@ namespace nes
     {
         if (addr < 0x2000)
         {
-            value = chr_rom[addr];
+            value = chr[addr];
             return true;
         }
         else if (addr >= 0x8000)
@@ -91,6 +100,11 @@ namespace nes
 
     bool cart_t::write(uint16_t addr, uint8_t value)
     {
+        if (header.chr_chunks == 0 && addr < 0x2000)
+        {
+            chr_ram[addr] = value;
+            return true;
+        }
         return false;
     }
 }
