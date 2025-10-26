@@ -10,6 +10,7 @@
 #include "oam_dma.h"
 
 #include <optional>
+#include <functional>
 
 namespace nes
 {
@@ -18,8 +19,8 @@ namespace nes
         nes_t();
         void reset();
         void clock();
-        void clock_cpu();
-        void clock_frame();
+        void clock_instruction(std::function<void()> on_clock);
+        void clock_frame(std::function<void()> on_clock);
         void unload_cart();
         void load_cart(cart_t cart);
 

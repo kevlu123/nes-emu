@@ -10,6 +10,18 @@
 #include "nes.h"
 
 #include <fstream>
+#include <deque>
+#include <algorithm>
+
+constexpr size_t AUDIO_SAMPLE_RATE = 48000;
+constexpr size_t APU_DEBUG_WIDTH = 512;
+constexpr size_t APU_HISTORY_LENGTH = AUDIO_SAMPLE_RATE * 2;
+
+static constexpr SDL_AudioSpec audio_spec = {
+    .format = SDL_AUDIO_F32,
+    .channels = 1,
+    .freq = AUDIO_SAMPLE_RATE,
+};
 
 struct colour_t
 {
@@ -83,20 +95,45 @@ static const colour_t NTSC_PALETTE[64] = {
 	colour_t{ 0,   0,   0  , 255 },
 };
 
+template <size_t Width, size_t Height>
+struct debug_image_t
+{
+    constexpr static size_t width = Width;
+    constexpr static size_t height = Height;
+
+    SDL_Texture* texture = nullptr;
+    uint8_t data[Width * Height] = { 0 };
+};
+
 static struct
 {
     SDL_Window* window = nullptr;
     SDL_Renderer* renderer = nullptr;
+    SDL_AudioDeviceID audio_device = 0;
+    SDL_AudioStream *audio_stream = nullptr;
+    std::vector<float> new_samples;
     std::unique_ptr<nes::nes_t> nes;
+    float audio_tick_counter = 0;
     bool emulation_running = true;
     int emulation_speed = 1;
 
-    SDL_Texture* debug_palette_tex = nullptr;
-    SDL_Texture* debug_pattern_table_tex = nullptr;
-    SDL_Texture* debug_nametable_tex = nullptr;
-    uint8_t debug_palette[32];
-    uint8_t debug_pattern_table[256 * 128];
-    uint8_t debug_nametable[512 * 512];
+    debug_image_t<16, 2> debug_palette;
+    debug_image_t<256, 128> debug_pattern_table;
+    debug_image_t<512, 512> debug_nametable;
+    debug_image_t<APU_DEBUG_WIDTH, 16> debug_pulse1;
+    debug_image_t<APU_DEBUG_WIDTH, 16> debug_pulse2;
+    debug_image_t<APU_DEBUG_WIDTH, 16> debug_triangle;
+    debug_image_t<APU_DEBUG_WIDTH, 16> debug_noise;
+    debug_image_t<APU_DEBUG_WIDTH, 128> debug_dmc;
+    debug_image_t<APU_DEBUG_WIDTH, 128> debug_apu;
+    std::deque<uint8_t> pulse1_history;
+    std::deque<uint8_t> pulse2_history;
+    std::deque<uint8_t> triangle_history;
+    std::deque<uint8_t> noise_history;
+    std::deque<uint8_t> dmc_history;
+    std::deque<float> apu_history;
+    float audio_viewport_min = -2.0f;
+    float audio_viewport_max = 0.0f;
     bool debug_grid_enable = false;
 } context;
 
@@ -115,6 +152,15 @@ static SDL_Texture* CreateTexture(int width, int height)
     }
     SDL_SetTextureScaleMode(texture, SDL_SCALEMODE_NEAREST);
     return texture;
+}
+
+template <size_t Width, size_t Height>
+static bool CreateTexture(debug_image_t<Width, Height>& debug_image)
+{
+    debug_image.texture = CreateTexture(
+        (int)Width,
+        (int)Height);
+    return debug_image.texture != nullptr;
 }
 
 static void WriteTexture(
@@ -164,6 +210,17 @@ static void WriteTexture(
     SDL_UnlockTexture(texture);
 }
 
+template <size_t Width, size_t Height>
+static void WriteTexture(
+    debug_image_t<Width, Height>& debug_image,
+    bool debug_grid = false)
+{
+    WriteTexture(
+        debug_image.texture,
+        debug_image.data,
+        debug_grid);
+}
+
 struct disassembly_t
 {
     uint16_t addr;
@@ -171,9 +228,25 @@ struct disassembly_t
     std::string args;
 };
 
+static bool check_window_collapsed()
+{
+    if (ImGui::IsWindowCollapsed())
+    {
+        ImGui::SetWindowSize({ 256, 1 });
+        ImGui::End();
+        return true;
+    }
+    return false;
+}
+
 static void show_cpu_dism()
 {
     ImGui::Begin("CPU");
+    if (check_window_collapsed())
+    {
+        return;
+    }
+
     ImGui::SetWindowSize({});
     ImGui::Text("SP:   %02X   A: %02X   X: %02X   Y: %02X",
         context.nes->cpu.sp,
@@ -356,11 +429,18 @@ static void show_cpu_dism()
 static void show_ram()
 {
     ImGui::Begin("RAM");
+    if (check_window_collapsed())
+    {
+        return;
+    }
+
     ImGui::SetWindowSize({ 0, 640 });
-    ImGui::Text("       0  1  2  3   4  5  6  7   8  9  A  B   C  D  E  F");
     for (size_t i = 0; i < 0x800; i += 0x100)
     {
-        ImGui::Text("");
+        if (i)
+        {
+            ImGui::Text("");
+        }
         for (size_t j = 0; j < 0x100; j += 16)
         {
             ImGui::Text("%04X: %02X %02X %02X %02X  %02X %02X %02X %02X  "
@@ -389,12 +469,18 @@ static void show_ram()
 
 static void show_palette()
 {
+    ImGui::Begin("PALETTE RAM");
+    if (check_window_collapsed())
+    {
+        return;
+    }
+
     size_t i = 0;
     for (uint8_t is_fg = 0; is_fg < 2; is_fg++)
     for (uint8_t attribute = 0; attribute < 4; attribute++)
     for (uint8_t pattern = 0; pattern < 4; pattern++)
     {
-        context.debug_palette[i++] = context.nes->ppu_bus.read(
+        context.debug_palette.data[i++] = context.nes->ppu_bus.read(
             nes::ppu_t::get_palette_addr(
                 is_fg,
                 attribute,
@@ -402,15 +488,20 @@ static void show_palette()
             true);
     }
 
-    WriteTexture(context.debug_palette_tex, context.debug_palette);
-    ImGui::Begin("PALETTE RAM");
+    WriteTexture(context.debug_palette);
     ImGui::SetWindowSize({});
-    ImGui::Image(context.debug_palette_tex, { 16 * 16, 16 * 2 });
+    ImGui::Image(context.debug_palette.texture, { 16 * 16, 16 * 2 });
     ImGui::End();
 }
 
 static void show_pattern_table()
 {
+    ImGui::Begin("PATTERN TABLE");
+    if (check_window_collapsed())
+    {
+        return;
+    }
+
     size_t i = 0;
     for (uint8_t coarse_y = 0; coarse_y < 16; coarse_y++)
     for (uint8_t fine_y = 0; fine_y < 8; fine_y++)
@@ -436,19 +527,24 @@ static void show_pattern_table()
             uint8_t pattern = ((pattern_lo >> fine_x) & 1)
                 | (((pattern_hi >> fine_x) & 1) << 1);
             static const uint8_t colours[4] = { 0x0F, 0x00, 0x10, 0x20 };
-            context.debug_pattern_table[i++] = colours[pattern];
+            context.debug_pattern_table.data[i++] = colours[pattern];
         }
     }
 
-    WriteTexture(context.debug_pattern_table_tex, context.debug_pattern_table);
-    ImGui::Begin("PATTERN TABLE");
+    WriteTexture(context.debug_pattern_table);
     ImGui::SetWindowSize({});
-    ImGui::Image(context.debug_pattern_table_tex, { 512, 256 });
+    ImGui::Image(context.debug_pattern_table.texture, { 512, 256 });
     ImGui::End();
 }
 
 static void show_nametable()
 {
+    ImGui::Begin("NAMETABLE");
+    if (check_window_collapsed())
+    {
+        return;
+    }
+
     size_t i = 0;
     for (uint8_t nametable_y = 0; nametable_y < 2; nametable_y++)
     {
@@ -497,7 +593,7 @@ static void show_nametable()
                     uint8_t pattern = ((pattern_lo >> fine_x) & 1)
                         | (((pattern_hi >> fine_x) & 1) << 1);
 
-                    context.debug_nametable[i++] = context.nes->ppu_bus.read(
+                    context.debug_nametable.data[i++] = context.nes->ppu_bus.read(
                         nes::ppu_t::get_palette_addr(
                             0,
                             attribute,
@@ -526,7 +622,7 @@ static void show_nametable()
                 for (uint8_t pattern = 0; pattern < 4; pattern++)
                 for (uint8_t repeat_x = 0; repeat_x < 4; repeat_x++)
                 {
-                    context.debug_nametable[i++] = context.nes->ppu_bus.read(
+                    context.debug_nametable.data[i++] = context.nes->ppu_bus.read(
                         nes::ppu_t::get_palette_addr(
                             0,
                             attribute,
@@ -537,16 +633,20 @@ static void show_nametable()
         }
     }
 
-    WriteTexture(context.debug_nametable_tex, context.debug_nametable);
-    ImGui::Begin("NAMETABLE");
+    WriteTexture(context.debug_nametable);
     ImGui::SetWindowSize({});
-    ImGui::Image(context.debug_nametable_tex, { 512, 512 });
+    ImGui::Image(context.debug_nametable.texture, { 512, 512 });
     ImGui::End();
 }
 
 static void show_sprites()
 {
     ImGui::Begin("OAM");
+    if (check_window_collapsed())
+    {
+        return;
+    }
+
     ImGui::SetWindowSize({ 0, 640 });
     if (context.nes->ppu.ppuctrl.sprite_size == 0)
     {
@@ -581,6 +681,89 @@ static void show_sprites()
     ImGui::End();
 }
 
+static void show_apu()
+{
+    ImGui::Begin("APU");
+    if (check_window_collapsed())
+    {
+        return;
+    }
+
+    if (ImGui::IsWindowHovered())
+    {
+        ImGuiIO& io = ImGui::GetIO();
+        if (io.MouseWheel != 0.0f)
+        {
+            float viewport_size = context.audio_viewport_max - context.audio_viewport_min;
+            float zoom_amount = viewport_size * 0.1f * (io.MouseWheel > 0.0f ? 1.0f : -1.0f);
+            context.audio_viewport_min += zoom_amount;
+            context.audio_viewport_min = std::clamp(context.audio_viewport_min, -2.0f, -0.001f);
+        }
+    }
+
+    constexpr uint8_t BG = 0x2D;
+    constexpr uint8_t WHITE = 0x30;
+
+    memset(context.debug_pulse1.data, BG, sizeof(context.debug_pulse1.data));
+    memset(context.debug_pulse2.data, BG, sizeof(context.debug_pulse2.data));
+    memset(context.debug_triangle.data, BG, sizeof(context.debug_triangle.data));
+    memset(context.debug_noise.data, BG, sizeof(context.debug_noise.data));
+    memset(context.debug_dmc.data, BG, sizeof(context.debug_dmc.data));
+    memset(context.debug_apu.data, BG, sizeof(context.debug_apu.data));
+
+    for (size_t i = 0; i < APU_DEBUG_WIDTH; i++)
+    {
+        float viewport_pos = (((float)i / (float)APU_DEBUG_WIDTH)
+            * (context.audio_viewport_max - context.audio_viewport_min))
+            + context.audio_viewport_min;
+        size_t index = APU_HISTORY_LENGTH + (size_t)std::floor(AUDIO_SAMPLE_RATE * viewport_pos);
+        if (index >= APU_HISTORY_LENGTH)
+        {
+            continue;
+        }
+
+        uint8_t sample = context.pulse1_history[index];
+        context.debug_pulse1.data[APU_DEBUG_WIDTH * (context.debug_pulse1.height - sample - 1) + i] = WHITE;
+        
+        sample = context.pulse2_history[index];
+        context.debug_pulse2.data[APU_DEBUG_WIDTH * (context.debug_pulse2.height - sample - 1) + i] = WHITE;
+
+        sample = context.triangle_history[index];
+        context.debug_triangle.data[APU_DEBUG_WIDTH * (context.debug_triangle.height - sample - 1) + i] = WHITE;
+
+        sample = context.noise_history[index];
+        context.debug_noise.data[APU_DEBUG_WIDTH * (context.debug_noise.height - sample - 1) + i] = WHITE;
+
+        sample = context.dmc_history[index];
+        context.debug_dmc.data[APU_DEBUG_WIDTH * (context.debug_dmc.height - sample - 1) + i] = WHITE;
+
+        sample = (uint8_t)(context.apu_history[index] * 127.0f);
+        context.debug_apu.data[APU_DEBUG_WIDTH * (context.debug_apu.height - sample - 1) + i] = WHITE;
+    }
+
+    WriteTexture(context.debug_pulse1);
+    WriteTexture(context.debug_pulse2);
+    WriteTexture(context.debug_triangle);
+    WriteTexture(context.debug_noise);
+    WriteTexture(context.debug_dmc);
+    WriteTexture(context.debug_apu);
+
+    ImGui::SetWindowSize({});
+    ImGui::Text("\n Pulse 1");
+    ImGui::Image(context.debug_pulse1.texture, { APU_DEBUG_WIDTH * 2, context.debug_pulse1.height * 2 });
+    ImGui::Text("\n Pulse 2");
+    ImGui::Image(context.debug_pulse2.texture, { APU_DEBUG_WIDTH * 2, context.debug_pulse2.height * 2 });
+    ImGui::Text("\n Triangle");
+    ImGui::Image(context.debug_triangle.texture, { APU_DEBUG_WIDTH * 2, context.debug_triangle.height * 2 });
+    ImGui::Text("\n Noise");
+    ImGui::Image(context.debug_noise.texture, { APU_DEBUG_WIDTH * 2, context.debug_noise.height * 2 });
+    ImGui::Text("\n DMC");
+    ImGui::Image(context.debug_dmc.texture, { APU_DEBUG_WIDTH * 2, context.debug_dmc.height * 2 });
+    ImGui::Text("\n Mix");
+    ImGui::Image(context.debug_apu.texture, { APU_DEBUG_WIDTH * 2, context.debug_apu.height * 2 });
+    ImGui::End();
+}
+
 static void handle_key_up(SDL_KeyboardEvent key)
 {
     switch (key.key)
@@ -612,10 +795,37 @@ static void handle_key_up(SDL_KeyboardEvent key)
     }
 }
 
+static void on_clock()
+{
+    constexpr float TICKS_PER_SAMPLE = 5369319 / AUDIO_SAMPLE_RATE;
+    context.audio_tick_counter++;
+    if (context.audio_tick_counter < TICKS_PER_SAMPLE)
+    {
+        return;
+    }
+    context.audio_tick_counter -= TICKS_PER_SAMPLE;
+
+    float mixed_sample = context.nes->apu.get_mixed_sample();
+    context.pulse1_history.pop_front();
+    context.pulse1_history.push_back(context.nes->apu.pulse1.get_sample());
+    context.pulse2_history.pop_front();
+    context.pulse2_history.push_back(context.nes->apu.pulse2.get_sample());
+    context.triangle_history.pop_front();
+    context.triangle_history.push_back(context.nes->apu.triangle.get_sample());
+    context.noise_history.pop_front();
+    context.noise_history.push_back(context.nes->apu.noise.get_sample());
+    context.dmc_history.pop_front();
+    context.dmc_history.push_back(context.nes->apu.dmc.get_sample());
+    context.apu_history.pop_front();
+    context.apu_history.push_back(mixed_sample);
+    context.new_samples.push_back(mixed_sample * 2.0f - 1.0f);
+}
+
 static void handle_key_down(SDL_KeyboardEvent key)
 {
     bool ctrl = (key.mod & (SDL_KMOD_LCTRL | SDL_KMOD_RCTRL)) != 0;
     bool alt = (key.mod & (SDL_KMOD_LALT | SDL_KMOD_RALT)) != 0;
+    bool shift = (key.mod & (SDL_KMOD_LSHIFT | SDL_KMOD_RSHIFT)) != 0;
     switch (key.key)
     {
     case SDLK_A:
@@ -670,7 +880,10 @@ static void handle_key_down(SDL_KeyboardEvent key)
         }
         break;
     case SDLK_F11:
-        context.nes->clock_cpu();
+        for (int i = 0; i < (shift ? 10 : 1); i++)
+        {
+            context.nes->clock_instruction(on_clock);
+        }
         break;
     case SDLK_1:
         if (ctrl)
@@ -719,7 +932,7 @@ int main(int argc, char* argv[])
 
     // Initialise SDL
 
-    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD))
+    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMEPAD))
     {
         SPDLOG_ERROR("Failed to initialize SDL: {}", SDL_GetError());
         return -1;
@@ -758,23 +971,79 @@ int main(int argc, char* argv[])
         nes::ppu_t::SCREEN_HEIGHT);
     if (nes_screen_texture == nullptr)
     {
+        SPDLOG_ERROR("Error: nes_screen_texture CreateTexture(): {}", SDL_GetError());
         return -1;
     }
 
-    if (!(context.debug_nametable_tex = CreateTexture(512, 512)))
+    if (!CreateTexture(context.debug_palette))
     {
+        SPDLOG_ERROR("Error: debug_palette CreateTexture(): {}", SDL_GetError());
+        return -1;
+    }
+    if (!CreateTexture(context.debug_pattern_table))
+    {
+        SPDLOG_ERROR("Error: debug_pattern_table CreateTexture(): {}", SDL_GetError());
+        return -1;
+    }
+    if (!CreateTexture(context.debug_nametable))
+    {
+        SPDLOG_ERROR("Error: debug_nametable CreateTexture(): {}", SDL_GetError());
+        return -1;
+    }
+    if (!CreateTexture(context.debug_pulse1))
+    {
+        SPDLOG_ERROR("Error: debug_pulse1 CreateTexture(): {}", SDL_GetError());
+        return -1;
+    }
+    if (!CreateTexture(context.debug_pulse2))
+    {
+        SPDLOG_ERROR("Error: debug_pulse2 CreateTexture(): {}", SDL_GetError());
+        return -1;
+    }
+    if (!CreateTexture(context.debug_triangle))
+    {
+        SPDLOG_ERROR("Error: debug_triangle CreateTexture(): {}", SDL_GetError());
+        return -1;
+    }
+    if (!CreateTexture(context.debug_noise))
+    {
+        SPDLOG_ERROR("Error: debug_noise CreateTexture(): {}", SDL_GetError());
+        return -1;
+    }
+    if (!CreateTexture(context.debug_dmc))
+    {
+        SPDLOG_ERROR("Error: debug_dmc CreateTexture(): {}", SDL_GetError());
+        return -1;
+    }
+    if (!CreateTexture(context.debug_apu))
+    {
+        SPDLOG_ERROR("Error: debug_apu CreateTexture(): {}", SDL_GetError());
         return -1;
     }
 
-    if (!(context.debug_pattern_table_tex = CreateTexture(256, 128)))
+    context.audio_device = SDL_OpenAudioDevice(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &audio_spec);
+    if (context.audio_device == 0)
     {
+        SPDLOG_ERROR("Error: SDL_OpenAudioDevice(): {}", SDL_GetError());
         return -1;
     }
-
-    if (!(context.debug_palette_tex = CreateTexture(16, 2)))
+    context.audio_stream = SDL_CreateAudioStream(&audio_spec, &audio_spec);
+    if (context.audio_stream == nullptr)
     {
+        SPDLOG_ERROR("Error: SDL_CreateAudioStream(): {}", SDL_GetError());
         return -1;
     }
+    if (!SDL_BindAudioStream(context.audio_device, context.audio_stream))
+    {
+        SPDLOG_ERROR("Error: SDL_BindAudioStream(): {}", SDL_GetError());
+        return -1;
+    }
+    context.pulse1_history.resize(APU_HISTORY_LENGTH, 0);
+    context.pulse2_history.resize(APU_HISTORY_LENGTH, 0);
+    context.triangle_history.resize(APU_HISTORY_LENGTH, 0);
+    context.noise_history.resize(APU_HISTORY_LENGTH, 0);
+    context.dmc_history.resize(APU_HISTORY_LENGTH, 0);
+    context.apu_history.resize(APU_HISTORY_LENGTH, 0);
 
     // Initialise imgui
 
@@ -831,13 +1100,17 @@ int main(int argc, char* argv[])
             {
                 for (int j = 0; j < context.emulation_speed; j++)
                 {
-                    context.nes->clock_frame();
+                    context.nes->clock_frame(on_clock);
                 }
                 frames_run++;
                 fps_counter++;
             }
         }
         frames_run = frames_expected;
+
+        SDL_PutAudioStreamData(context.audio_stream, context.new_samples.data(), (int)context.new_samples.size() * sizeof(float));
+        context.new_samples.clear();
+
         if (current_ticks / 1000 != tick_counter / 1000)
         {
             SDL_SetWindowTitle(context.window, fmt::format(
@@ -859,10 +1132,12 @@ int main(int argc, char* argv[])
         show_cpu_dism();
         show_ram();
         show_sprites();
+
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{});
         show_palette();
         show_pattern_table();
         show_nametable();
+        show_apu();
         ImGui::PopStyleVar();
 
         // Render NES screen
@@ -911,9 +1186,18 @@ int main(int argc, char* argv[])
     ImGui_ImplSDL3_Shutdown();
     ImGui::DestroyContext();
 
-    SDL_DestroyTexture(context.debug_palette_tex);
-    SDL_DestroyTexture(context.debug_pattern_table_tex);
-    SDL_DestroyTexture(context.debug_nametable_tex);
+    SDL_UnbindAudioStream(context.audio_stream);
+    SDL_DestroyAudioStream(context.audio_stream);
+    SDL_CloseAudioDevice(context.audio_device);
+    SDL_DestroyTexture(context.debug_palette.texture);
+    SDL_DestroyTexture(context.debug_pattern_table.texture);
+    SDL_DestroyTexture(context.debug_nametable.texture);
+    SDL_DestroyTexture(context.debug_pulse1.texture);
+    SDL_DestroyTexture(context.debug_pulse2.texture);
+    SDL_DestroyTexture(context.debug_triangle.texture);
+    SDL_DestroyTexture(context.debug_noise.texture);
+    SDL_DestroyTexture(context.debug_dmc.texture);
+    SDL_DestroyTexture(context.debug_apu.texture);
     SDL_DestroyTexture(nes_screen_texture);
     SDL_DestroyRenderer(context.renderer);
     SDL_DestroyWindow(context.window);

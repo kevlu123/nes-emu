@@ -48,28 +48,32 @@ namespace nes
                 cpu.clock();
             }
             oam_dma.clock();
+            apu.clock();
         }
         ppu.clock();
         ppu_clock_count++;
     }
 
-    void nes_t::clock_cpu()
+    void nes_t::clock_instruction(std::function<void()> on_clock)
     {
         while (cpu.cycles_until_next_instruction == 0)
         {
             clock();
+            on_clock();
         }
         while (cpu.cycles_until_next_instruction > 0)
         {
             clock();
+            on_clock();
         }
     }
 
-    void nes_t::clock_frame()
+    void nes_t::clock_frame(std::function<void()> on_clock)
     {
         do
         {
             clock();
+            on_clock();
         } while (ppu.scanline != 0 || ppu.dot != 0);
     }
 
