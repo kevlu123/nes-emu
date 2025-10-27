@@ -728,7 +728,7 @@ static void show_apu()
 
         uint8_t sample = context.pulse1_history[index];
         context.debug_pulse1.data[APU_DEBUG_WIDTH * (context.debug_pulse1.height - sample - 1) + i] = WHITE;
-        
+
         sample = context.pulse2_history[index];
         context.debug_pulse2.data[APU_DEBUG_WIDTH * (context.debug_pulse2.height - sample - 1) + i] = WHITE;
 

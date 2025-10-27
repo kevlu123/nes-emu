@@ -108,7 +108,7 @@ namespace nes
         cycles_until_next_instruction = 8;
     }
 
-    
+
     void cpu_t::clock()
     {
         if (cycles_until_next_instruction == 0)
@@ -122,7 +122,7 @@ namespace nes
         }
         cycles_until_next_instruction--;
     }
-    
+
     void cpu_t::push_stack(uint8_t value)
     {
         cpu_bus->write(0x0100 + sp, value);

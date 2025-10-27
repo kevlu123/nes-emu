@@ -23,7 +23,7 @@ namespace nes
         void irq();
         void nmi();
         void clock();
-        
+
         union
         {
             struct
@@ -39,7 +39,7 @@ namespace nes
             };
             uint8_t reg;
         } status;
-        
+
         uint8_t ra;
         uint8_t rx;
         uint8_t ry;
@@ -50,10 +50,10 @@ namespace nes
 
         void push_stack(uint8_t value);
         uint8_t pop_stack();
-        
+
         using addr_mode_fn = bool(void);
         using opcode_fn = void(void);
-        
+
         addr_mode_fn IMP, IMM, ACC;
         addr_mode_fn ABS, ABX, ABY;
         addr_mode_fn ZRP, ZPX, ZPY;

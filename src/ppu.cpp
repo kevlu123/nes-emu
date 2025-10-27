@@ -54,12 +54,12 @@ namespace nes
         *this = ppu_t(*ppu_bus, *cpu, *oam_dma, screen_buffer);
         set_cart(cart);
     }
-    
+
     void ppu_t::set_cart(cart_t* cart)
     {
         this->cart = cart;
     }
-    
+
     bool ppu_t::cpu_read(uint16_t addr, uint8_t& value, bool readonly)
     {
         if (addr >= 0x2000 && addr <= 0x3FFF)
@@ -292,7 +292,7 @@ namespace nes
         {
             secondary_oam_bytes[dot / 2 - 1] = 0xFF;
         }
-        
+
         if (dot == 257 && scanline < SCREEN_HEIGHT)
         {
             secondary_oam_count = 0;

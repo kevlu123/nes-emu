@@ -24,7 +24,7 @@ namespace nes
         this->page = page;
         cycles_remaining = 513;
     }
-    
+
     void oam_dma_t::clock()
     {
         if (cycles_remaining > 0)
@@ -34,7 +34,7 @@ namespace nes
             {
                 return;
             }
-            
+
             if (cycles_remaining % 2 == 1)
             {
                 uint8_t offset = (511 - cycles_remaining) / 2;

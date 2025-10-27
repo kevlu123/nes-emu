@@ -44,7 +44,7 @@ namespace nes
         }
         return false;
     }
-    
+
     size_t mapper_t::get_prg_bank_count(uint32_t bank_size) const
     {
         return cart->prg_rom.size() / bank_size;

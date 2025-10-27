@@ -15,7 +15,7 @@ namespace nes
         uint8_t signature[4];
 
         uint8_t prg_chunks; // Size in 16KB units
-        
+
         uint8_t chr_chunks; // Size in 8KB units
 
         mirroring_t mirroring : 1;

@@ -53,7 +53,7 @@ namespace nes
             bool readonly,
             void* ctx);
         using bus_write_t = bool (*)(uint16_t addr, uint8_t value, void* ctx);
-        
+
         template <typename Callback>
         struct connection_t
         {
