@@ -2,7 +2,7 @@
 #include "pch.h"
 #include "bus.h"
 #include "cpu.h"
-#include "mirroring.h"
+#include "cart.h"
 #include "oam_dma.h"
 
 namespace nes
@@ -34,6 +34,7 @@ namespace nes
         ppu_t(bus_t& ppu_bus, cpu_t& cpu, oam_dma_t& oam_dma, uint8_t* screen_buffer);
         ~ppu_t();
         void reset();
+        void set_cart(cart_t* cart);
         bool cpu_read(uint16_t addr, uint8_t& value, bool readonly);
         bool cpu_write(uint16_t addr, uint8_t value);
         bool ppu_read(uint16_t addr, uint8_t& value, bool readonly);
@@ -202,7 +203,6 @@ namespace nes
         int scanline;
         bool is_first_frame;
 
-        mirroring_t mirroring;
         uint8_t nametable[0x800];
         uint8_t palette[0x20];
 
@@ -230,6 +230,7 @@ namespace nes
         bus_t* ppu_bus;
         cpu_t* cpu;
         oam_dma_t* oam_dma;
+        cart_t* cart;
         uint8_t* screen_buffer;
     };
 }

@@ -2,9 +2,11 @@
 #include "pch.h"
 #include "bus.h"
 #include "mirroring.h"
+#include "mapper.h"
 
 #include <vector>
 #include <span>
+#include <memory>
 
 namespace nes
 {
@@ -47,13 +49,18 @@ namespace nes
     {
         static bool try_load(std::vector<uint8_t> rom, cart_t& out_cart);
         void reset();
-        bool read(uint16_t addr, uint8_t& value, bool readonly);
-        bool write(uint16_t addr, uint8_t value);
-        
+
+        mirroring_t get_mirroring() const;
+        bool cpu_read(uint16_t addr, uint8_t& value, bool readonly);
+        bool cpu_write(uint16_t addr, uint8_t value);
+        bool ppu_read(uint16_t addr, uint8_t& value, bool readonly);
+        bool ppu_write(uint16_t addr, uint8_t value);
+
         ines_header_t header;
         std::vector<uint8_t> rom;
         std::span<uint8_t> prg_rom;
         std::span<uint8_t> chr;
         std::vector<uint8_t> chr_ram;
+        std::unique_ptr<mapper_t> mapper;
     };
 }

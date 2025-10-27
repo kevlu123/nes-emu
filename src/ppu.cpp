@@ -1,9 +1,13 @@
 #include "pch.h"
 #include "ppu.h"
+#include "cart.h"
 
 namespace nes
 {
-    ppu_t::ppu_t(bus_t& ppu_bus, cpu_t& cpu, oam_dma_t& oam_dma, uint8_t* screen_buffer)
+    ppu_t::ppu_t(bus_t& ppu_bus,
+                 cpu_t& cpu,
+                 oam_dma_t& oam_dma,
+                 uint8_t* screen_buffer)
         : ppu_bus(&ppu_bus),
           cpu(&cpu),
           oam_dma(&oam_dma),
@@ -26,7 +30,6 @@ namespace nes
           pattern_hi_read(0),
           pattern_lo_read_shift_reg(0),
           pattern_hi_read_shift_reg(0),
-          mirroring(mirroring_t::horizontal),
           nametable{},
           palette{},
           oam_bytes{},
@@ -47,7 +50,14 @@ namespace nes
 
     void ppu_t::reset()
     {
+        cart_t *cart = this->cart;
         *this = ppu_t(*ppu_bus, *cpu, *oam_dma, screen_buffer);
+        set_cart(cart);
+    }
+    
+    void ppu_t::set_cart(cart_t* cart)
+    {
+        this->cart = cart;
     }
     
     bool ppu_t::cpu_read(uint16_t addr, uint8_t& value, bool readonly)
@@ -193,6 +203,16 @@ namespace nes
     {
         if (addr >= 0x2000 && addr <= 0x3EFF)
         {
+            mirroring_t mirroring;
+            if (cart)
+            {
+                mirroring = cart->mapper->mirroring;
+            }
+            else
+            {
+                SPDLOG_WARN("PPU read nametable without cart");
+                mirroring = mirroring_t::horizontal;
+            }
             switch (mirroring)
             {
             case mirroring_t::horizontal:
@@ -225,6 +245,16 @@ namespace nes
     {
         if (addr >= 0x2000 && addr <= 0x3EFF)
         {
+            mirroring_t mirroring;
+            if (cart)
+            {
+                mirroring = cart->mapper->mirroring;
+            }
+            else
+            {
+                SPDLOG_WARN("PPU write nametable without cart");
+                mirroring = mirroring_t::horizontal;
+            }
             switch (mirroring)
             {
             case mirroring_t::horizontal:

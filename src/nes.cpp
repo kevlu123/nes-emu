@@ -86,6 +86,7 @@ namespace nes
             cpu_bus.disconnect_write(&*cart);
             ppu_bus.disconnect_read(&*cart);
             ppu_bus.disconnect_write(&*cart);
+            ppu.set_cart(nullptr);
             cart = std::nullopt;
         }
     }
@@ -94,11 +95,11 @@ namespace nes
     {
         unload_cart();
         this->cart = std::move(cart);
-        cpu_bus.connect_read<&cart_t::read>(&*this->cart);
-        cpu_bus.connect_write<&cart_t::write>(&*this->cart);
-        ppu_bus.connect_read<&cart_t::read>(&*this->cart);
-        ppu_bus.connect_write<&cart_t::write>(&*this->cart);
-        ppu.mirroring = this->cart->header.mirroring;
+        cpu_bus.connect_read<&cart_t::cpu_read>(&*this->cart);
+        cpu_bus.connect_write<&cart_t::cpu_write>(&*this->cart);
+        ppu_bus.connect_read<&cart_t::ppu_read>(&*this->cart);
+        ppu_bus.connect_write<&cart_t::ppu_write>(&*this->cart);
+        ppu.set_cart(&*this->cart);
         reset();
     }
 }

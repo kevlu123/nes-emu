@@ -1,8 +1,23 @@
 #include "pch.h"
 #include "cart.h"
+#include "mappers/mapper000.h"
+#include "mappers/mapper004.h"
+
+#define MAPPER(n, T) case n: cart.mapper = std::make_unique<T>(cart); return true;
 
 namespace nes
 {
+    static bool load_mapper(uint8_t mapper_number, cart_t& cart)
+    {
+        switch (mapper_number)
+        {
+            MAPPER(0, mapper000_t);
+            MAPPER(4, mapper004_t);
+        default:
+            return false;
+        }
+    }
+
     bool cart_t::try_load(std::vector<uint8_t> rom, cart_t& cart)
     {
         size_t i = 0;
@@ -65,6 +80,12 @@ namespace nes
 
         uint8_t mapper_number = (cart.header.mapper_number_upper << 4)
                                | cart.header.mapper_number_lower;
+        if (!load_mapper(mapper_number, cart))
+        {
+            SPDLOG_ERROR("Unsupported mapper: {}", mapper_number);
+            return false;
+        }
+
         SPDLOG_INFO("Loaded ROM");
         SPDLOG_INFO("    Mapper:       {}", mapper_number);
         SPDLOG_INFO("    PRG ROM size: {}KB", cart.header.prg_chunks * 16);
@@ -81,30 +102,26 @@ namespace nes
 
     void cart_t::reset()
     {
+        mapper->reset();
     }
 
-    bool cart_t::read(uint16_t addr, uint8_t& value, bool readonly)
+    bool cart_t::cpu_read(uint16_t addr, uint8_t& value, bool readonly)
     {
-        if (addr < 0x2000)
-        {
-            value = chr[addr];
-            return true;
-        }
-        else if (addr >= 0x8000)
-        {
-            value = prg_rom[(addr - 0x8000) % prg_rom.size()];
-            return true;
-        }
-        return false;
+        return mapper->cpu_read(addr, value, readonly);
     }
 
-    bool cart_t::write(uint16_t addr, uint8_t value)
+    bool cart_t::cpu_write(uint16_t addr, uint8_t value)
     {
-        if (header.chr_chunks == 0 && addr < 0x2000)
-        {
-            chr_ram[addr] = value;
-            return true;
-        }
-        return false;
+        return mapper->cpu_write(addr, value);
+    }
+
+    bool cart_t::ppu_read(uint16_t addr, uint8_t& value, bool readonly)
+    {
+        return mapper->ppu_read(addr, value, readonly);
+    }
+
+    bool cart_t::ppu_write(uint16_t addr, uint8_t value)
+    {
+        return mapper->ppu_write(addr, value);
     }
 }
