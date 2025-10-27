@@ -1,42 +1,120 @@
 #pragma once
 #include "pch.h"
-#include "bus.h"
+#include "cpu.h"
 
 namespace nes
 {
-    struct apu_pulse_t
+    struct length_counter_t
     {
-        uint8_t get_sample() const;
+        static constexpr uint8_t LENGTH_COUNTER_LUT[32] = {
+            10, 254, 20,  2, 40,  4, 80,  6, 160,  8, 60, 10, 14, 12, 26, 14,
+            12,  16, 24, 18, 48, 20, 96, 22, 192, 24, 72, 26, 16, 28, 32, 30,
+        };
+
+        length_counter_t();
+        void clock();
+
+        bool halt;
+        uint8_t value;
     };
 
-    struct apu_triangle_t
+    struct envelope_t
     {
-        uint8_t get_sample() const;
+        envelope_t();
+        void clock();
+
+        bool start_flag;
+        bool loop;
+        uint8_t divider_period;
+        uint8_t divider;
+        uint8_t decay_level_counter;
     };
 
-    struct apu_noise_t
+    struct pulse_channel_t
     {
+        static constexpr bool SEQUENCE_LUT[4][8] = {
+			{ 0, 1, 0, 0, 0, 0, 0, 0 }, // 12.5%
+			{ 0, 1, 1, 0, 0, 0, 0, 0 }, // 25%
+			{ 0, 1, 1, 1, 1, 0, 0, 0 }, // 50%
+			{ 1, 0, 0, 1, 1, 1, 1, 1 }, // 25% negated
+        };
+
+        pulse_channel_t();
+        void clock();
+        void write(uint16_t addr, uint8_t value);
         uint8_t get_sample() const;
+
+        bool constant_volume;
+        uint8_t volume;
+        uint8_t duty;
+        uint8_t sequencer;
+        uint16_t timer_period;
+        uint16_t timer;
+        length_counter_t length_counter;
+        envelope_t envelope;
+        bool debug_enabled;
     };
 
-    struct apu_dmc_t
+    struct triangle_channel_t
     {
+        triangle_channel_t();
+        void clock();
         uint8_t get_sample() const;
+
+        bool debug_enabled;
+    };
+
+    struct noise_channel_t
+    {
+        noise_channel_t();
+        void clock();
+        uint8_t get_sample() const;
+
+        bool debug_enabled;
+    };
+
+    struct dmc_channel_t
+    {
+        dmc_channel_t();
+        void clock();
+        uint8_t get_sample() const;
+
+        bool debug_enabled;
     };
 
     struct apu_t
     {
-        apu_t();
+        apu_t(cpu_t& cpu);
         void reset();
         bool read(uint16_t addr, uint8_t& value, bool readonly);
         bool write(uint16_t addr, uint8_t value);
         void clock();
+        void clock_quarter_frame();
+        void clock_half_frame();
         float get_mixed_sample() const;
 
-        apu_pulse_t pulse1;
-        apu_pulse_t pulse2;
-        apu_triangle_t triangle;
-        apu_noise_t noise;
-        apu_dmc_t dmc;
+        union
+        {
+            struct
+            {
+                uint8_t unused : 6;
+                uint8_t interrupt_inhibit : 1;
+                uint8_t sequence_mode : 1;
+            };
+            uint8_t reg;
+        } frame_counter_ctrl;
+
+        pulse_channel_t pulse1;
+        pulse_channel_t pulse2;
+        triangle_channel_t triangle;
+        noise_channel_t noise;
+        dmc_channel_t dmc;
+
+        uint16_t clock_sequencer;
+        bool even_clock;
+        bool debug_enabled;
+
+    private:
+        cpu_t *cpu;
     };
 }

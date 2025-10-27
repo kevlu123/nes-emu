@@ -7,6 +7,7 @@ namespace nes
     nes_t::nes_t()
         : cpu(cpu_bus),
           ppu(ppu_bus, cpu, oam_dma, screen_buffer),
+          apu(cpu),
           oam_dma(cpu_bus),
           ppu_clock_count(0),
           screen_buffer{},

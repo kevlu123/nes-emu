@@ -1,44 +1,191 @@
 #include "pch.h"
 #include "apu.h"
 
-#include <math.h>
-static uint64_t t = 0;
-
 namespace nes
 {
-    uint8_t apu_pulse_t::get_sample() const
+    length_counter_t::length_counter_t()
+        : halt(false),
+          value(0)
     {
-        return t % 16;
     }
 
-    uint8_t apu_triangle_t::get_sample() const
+    void length_counter_t::clock()
+    {
+        if (value > 0 && !halt)
+        {
+            value--;
+        }
+    }
+
+    envelope_t::envelope_t()
+        : start_flag(false),
+          loop(false),
+          divider_period(0),
+          divider(0),
+          decay_level_counter(0)
+    {
+    }
+
+    void envelope_t::clock()
+    {
+        if (start_flag)
+        {
+            start_flag = false;
+            decay_level_counter = 15;
+            divider = divider_period;
+            return;
+        }
+
+        if (divider > 0)
+        {
+            divider--;
+            return;
+        }
+
+        divider = divider_period;
+        if (decay_level_counter > 0)
+        {
+            decay_level_counter--;
+            return;
+        }
+
+        if (loop)
+        {
+            decay_level_counter = 15;
+        }
+    }
+
+    pulse_channel_t::pulse_channel_t() 
+        : constant_volume(0),
+          volume(0),
+          duty(0),
+          sequencer(0),
+          timer_period(0),
+          timer(0),
+          debug_enabled(true)
+    {
+    }
+
+    void pulse_channel_t::clock()
+    {
+        timer--;
+        if (timer == 0xFFFF)
+        {
+            timer = timer_period;
+            sequencer = (sequencer + 1) % 8;
+        }
+    }
+
+    void pulse_channel_t::write(uint16_t addr, uint8_t value)
+    {
+        switch (addr & 3)
+        {
+        case 0:
+            envelope.divider_period = value & 0x0F;
+            envelope.loop = value & 0x20;
+            length_counter.halt = value & 0x20;
+            constant_volume = value & 0x10;
+            volume = value & 0x0F;
+            duty = (value >> 6) & 0x03;
+            break;
+        case 1:
+            SPDLOG_WARN("APU pulse sweep write 0x{:02X} stubbed", value);
+            break;
+        case 2:
+            timer_period &= 0xFF00;
+            timer_period |= value;
+            break;
+        case 3:
+            length_counter.value = length_counter_t::LENGTH_COUNTER_LUT[value >> 3];
+            envelope.start_flag = true;
+            timer_period &= 0x00FF;
+            timer_period |= (value & 3) << 8;
+            timer = timer_period;
+            sequencer = 0;
+            break;
+        }
+    }
+
+    uint8_t pulse_channel_t::get_sample() const
+    {
+        if (!debug_enabled ||
+            length_counter.value == 0 ||
+            timer_period < 8 ||
+            !SEQUENCE_LUT[duty][sequencer])
+        {
+            return 0;
+        }
+        else if (constant_volume)
+        {
+            return volume;
+        }
+        else
+        {
+            return envelope.decay_level_counter;
+        }
+    }
+
+    triangle_channel_t::triangle_channel_t()
+        : debug_enabled(true)
+    {
+    }
+
+    void triangle_channel_t::clock()
+    {
+    }
+
+    uint8_t triangle_channel_t::get_sample() const
     {
         return 0;
     }
 
-    uint8_t apu_noise_t::get_sample() const
+    noise_channel_t::noise_channel_t()
+        : debug_enabled(true)
+    {
+    }
+
+    void noise_channel_t::clock()
+    {
+    }
+
+    uint8_t noise_channel_t::get_sample() const
     {
         return 0;
     }
 
-    uint8_t apu_dmc_t::get_sample() const
+    dmc_channel_t::dmc_channel_t()
+        : debug_enabled(true)
+    {
+    }
+
+    void dmc_channel_t::clock()
+    {
+    }
+
+    uint8_t dmc_channel_t::get_sample() const
     {
         return 0;
     }
 
-    apu_t::apu_t()
+    apu_t::apu_t(cpu_t& cpu)
+        : cpu(&cpu),
+          clock_sequencer(0),
+          even_clock(false),
+          debug_enabled(true)
     {
     }
 
     void apu_t::reset()
     {
+        *this = apu_t(*cpu);
     }
 
     bool apu_t::read(uint16_t addr, uint8_t& value, bool readonly)
     {
-        if (addr >= 0x4000 && addr <= 0x4015)
+        if (addr == 0x4015)
         {
-            // SPDLOG_WARN("APU read stubbed");
+            SPDLOG_WARN("APU read 0x4015 stubbed");
+            value = 0;
             return true;
         }
         return false;
@@ -46,21 +193,110 @@ namespace nes
 
     bool apu_t::write(uint16_t addr, uint8_t value)
     {
-        if (addr >= 0x4000 && addr <= 0x4017 && addr != 0x4016)
+        switch (addr)
         {
-            // SPDLOG_WARN("APU write stubbed");
+        case 0x4000:
+        case 0x4001:
+        case 0x4002:
+        case 0x4003:
+            pulse1.write(addr, value);
             return true;
+        case 0x4004:
+        case 0x4005:
+        case 0x4006:
+        case 0x4007:
+            pulse2.write(addr, value);
+            return true;
+        case 0x4008:
+        case 0x400A:
+        case 0x400B:
+            SPDLOG_WARN("APU triangle write 0x{:02X} stubbed", value);
+            return true;
+        case 0x400C:
+        case 0x400E:
+        case 0x400F:
+            SPDLOG_WARN("APU noise write 0x{:02X} stubbed", value);
+            return true;
+        case 0x4010:
+        case 0x4011:
+        case 0x4012:
+        case 0x4013:
+            SPDLOG_WARN("APU DMC write 0x{:02X} stubbed", value);
+            return true;
+        case 0x4015:
+            SPDLOG_WARN("APU write 0x4015 stubbed");
+            return true;
+        case 0x4017:
+            frame_counter_ctrl.reg = value;
+            return true;
+        default:
+            return false;
         }
-        return false;
     }
 
     void apu_t::clock()
     {
-        t++;
+        even_clock = !even_clock;
+        triangle.clock();
+        if (even_clock)
+        {
+            pulse1.clock();
+            pulse2.clock();
+            noise.clock();
+            dmc.clock();
+
+            clock_sequencer++;
+            if (clock_sequencer == 3728)
+            {
+                clock_quarter_frame();
+            }
+            else if (clock_sequencer == 7456)
+            {
+                clock_quarter_frame();
+                clock_half_frame();
+            }
+            else if (clock_sequencer == 11185)
+            {
+                clock_quarter_frame();
+            }
+            else if (frame_counter_ctrl.sequence_mode == 0 && clock_sequencer >= 14914)
+            {
+                clock_quarter_frame();
+                clock_half_frame();
+                clock_sequencer = 0xFFFF;
+                if (!frame_counter_ctrl.interrupt_inhibit)
+                {
+                    cpu->irq();
+                }
+            }
+            else if (frame_counter_ctrl.sequence_mode == 1 && clock_sequencer >= 18640)
+            {
+                clock_quarter_frame();
+                clock_half_frame    ();
+                clock_sequencer = 0xFFFF;
+            }
+        }
+    }
+
+    void apu_t::clock_quarter_frame()
+    {
+        pulse1.envelope.clock();
+        pulse2.envelope.clock();
+    }
+
+    void apu_t::clock_half_frame()
+    {
+        pulse1.length_counter.clock();
+        pulse2.length_counter.clock();
     }
 
     float apu_t::get_mixed_sample() const
     {
+        if (!debug_enabled)
+        {
+            return 0.0f;
+        }
+
         float pulse_out = 0.0f;
         uint8_t pulse_sum = pulse1.get_sample() + pulse2.get_sample();
         if (pulse_sum > 0)

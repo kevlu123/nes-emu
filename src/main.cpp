@@ -14,7 +14,7 @@
 #include <algorithm>
 
 constexpr size_t AUDIO_SAMPLE_RATE = 48000;
-constexpr size_t APU_DEBUG_WIDTH = 512;
+constexpr size_t APU_DEBUG_WIDTH = 1024;
 constexpr size_t APU_HISTORY_LENGTH = AUDIO_SAMPLE_RATE * 2;
 
 static constexpr SDL_AudioSpec audio_spec = {
@@ -694,10 +694,14 @@ static void show_apu()
         ImGuiIO& io = ImGui::GetIO();
         if (io.MouseWheel != 0.0f)
         {
+            float mouse_x = io.MousePos.x - ImGui::GetWindowPos().x - ImGui::GetStyle().WindowPadding.x;
+            float mouse_ratio = mouse_x / APU_DEBUG_WIDTH;
             float viewport_size = context.audio_viewport_max - context.audio_viewport_min;
             float zoom_amount = viewport_size * 0.1f * (io.MouseWheel > 0.0f ? 1.0f : -1.0f);
-            context.audio_viewport_min += zoom_amount;
+            context.audio_viewport_min += zoom_amount * mouse_ratio;
+            context.audio_viewport_max -= zoom_amount * (1.0f - mouse_ratio);
             context.audio_viewport_min = std::clamp(context.audio_viewport_min, -2.0f, -0.001f);
+            context.audio_viewport_max = std::clamp(context.audio_viewport_max, -1.999f, 0.0f);
         }
     }
 
@@ -749,18 +753,19 @@ static void show_apu()
     WriteTexture(context.debug_apu);
 
     ImGui::SetWindowSize({});
-    ImGui::Text("\n Pulse 1");
-    ImGui::Image(context.debug_pulse1.texture, { APU_DEBUG_WIDTH * 2, context.debug_pulse1.height * 2 });
-    ImGui::Text("\n Pulse 2");
-    ImGui::Image(context.debug_pulse2.texture, { APU_DEBUG_WIDTH * 2, context.debug_pulse2.height * 2 });
-    ImGui::Text("\n Triangle");
-    ImGui::Image(context.debug_triangle.texture, { APU_DEBUG_WIDTH * 2, context.debug_triangle.height * 2 });
-    ImGui::Text("\n Noise");
-    ImGui::Image(context.debug_noise.texture, { APU_DEBUG_WIDTH * 2, context.debug_noise.height * 2 });
-    ImGui::Text("\n DMC");
-    ImGui::Image(context.debug_dmc.texture, { APU_DEBUG_WIDTH * 2, context.debug_dmc.height * 2 });
-    ImGui::Text("\n Mix");
-    ImGui::Image(context.debug_apu.texture, { APU_DEBUG_WIDTH * 2, context.debug_apu.height * 2 });
+
+    ImGui::Checkbox("Pulse 1", &context.nes->apu.pulse1.debug_enabled);
+    ImGui::Image(context.debug_pulse1.texture, { APU_DEBUG_WIDTH, context.debug_pulse1.height });
+    ImGui::Checkbox("Pulse 2", &context.nes->apu.pulse2.debug_enabled);
+    ImGui::Image(context.debug_pulse2.texture, { APU_DEBUG_WIDTH, context.debug_pulse2.height });
+    ImGui::Checkbox("Triangle", &context.nes->apu.triangle.debug_enabled);
+    ImGui::Image(context.debug_triangle.texture, { APU_DEBUG_WIDTH, context.debug_triangle.height });
+    ImGui::Checkbox("Noise", &context.nes->apu.noise.debug_enabled);
+    ImGui::Image(context.debug_noise.texture, { APU_DEBUG_WIDTH, context.debug_noise.height });
+    ImGui::Checkbox("DMC", &context.nes->apu.dmc.debug_enabled);
+    ImGui::Image(context.debug_dmc.texture, { APU_DEBUG_WIDTH, context.debug_dmc.height });
+    ImGui::Checkbox("Mix", &context.nes->apu.debug_enabled);
+    ImGui::Image(context.debug_apu.texture, { APU_DEBUG_WIDTH, context.debug_apu.height });
     ImGui::End();
 }
 
@@ -865,6 +870,12 @@ static void handle_key_down(SDL_KeyboardEvent key)
         if (ctrl)
         {
             context.nes->reset();
+            std::fill(context.pulse1_history.begin(), context.pulse1_history.end(), 0);
+            std::fill(context.pulse2_history.begin(), context.pulse2_history.end(), 0);
+            std::fill(context.triangle_history.begin(), context.triangle_history.end(), 0);
+            std::fill(context.noise_history.begin(), context.noise_history.end(), 0);
+            std::fill(context.dmc_history.begin(), context.dmc_history.end(), 0);
+            std::fill(context.apu_history.begin(), context.apu_history.end(), 0.0f);
         }
         break;
     case SDLK_P:
