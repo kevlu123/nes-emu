@@ -6,7 +6,7 @@ namespace nes
 {
     struct length_counter_t
     {
-        static constexpr uint8_t LENGTH_COUNTER_LUT[32] = {
+        static constexpr uint8_t LENGTH_LUT[32] = {
             10, 254, 20,  2, 40,  4, 80,  6, 160,  8, 60, 10, 14, 12, 26, 14,
             12,  16, 24, 18, 48, 20, 96, 22, 192, 24, 72, 26, 16, 28, 32, 30,
         };
@@ -58,16 +58,32 @@ namespace nes
 
     struct triangle_channel_t
     {
+        static constexpr uint8_t SEQUENCE_LUT[32] = {
+            15, 14, 13, 12, 11, 10, 9, 8,
+            7,  6,  5,  4,  3,  2, 1, 0,
+            0,  1,  2,  3,  4,  5, 6, 7,
+            8,  9, 10, 11, 12, 13,14,15,
+        };
+
         triangle_channel_t();
         void clock();
+        void write(uint16_t addr, uint8_t value);
         uint8_t get_sample() const;
 
+        bool reload_flag;
+        bool control_flag;
+        uint8_t linear_counter;
+        uint8_t linear_counter_reload;
+        uint16_t timer_period;
+        uint16_t timer;
+        uint8_t sequencer;
+        length_counter_t length_counter;
         bool debug_enabled;
     };
 
     struct noise_channel_t
     {
-        static constexpr uint16_t NOISE_TIMER_LUT[16] = {
+        static constexpr uint16_t TIMER_LUT[16] = {
             2, 4, 8, 16, 32, 48, 64, 80, 101, 127, 190, 254, 381, 508, 1017, 2034,
         };
 

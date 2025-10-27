@@ -19,7 +19,7 @@ namespace nes
 
     void length_counter_t::load(uint8_t index)
     {
-        value = LENGTH_COUNTER_LUT[index];
+        value = LENGTH_LUT[index];
     }
 
     envelope_t::envelope_t()
@@ -101,7 +101,7 @@ namespace nes
         case 3:
             length_counter.load(value >> 3);
             timer_period &= 0x00FF;
-            timer_period |= (value & 3) << 8;
+            timer_period |= (value & 7) << 8;
             timer = timer_period;
             sequencer = 0;
             envelope.start_flag = true;
@@ -129,17 +129,61 @@ namespace nes
     }
 
     triangle_channel_t::triangle_channel_t()
-        : debug_enabled(true)
+        : reload_flag(false),
+          control_flag(false),
+          linear_counter(0),
+          linear_counter_reload(0),
+          timer_period(0),
+          timer(0),
+          sequencer(0),
+          debug_enabled(true)
     {
     }
 
     void triangle_channel_t::clock()
     {
+        timer--;
+        if (timer == 0xFFFF)
+        {
+            timer = timer_period;
+            if (timer_period >= 2 && linear_counter > 0 && length_counter.value > 0)
+            {
+                sequencer = (sequencer + 1) % 32;
+            }
+        }
+    }
+
+    void triangle_channel_t::write(uint16_t addr, uint8_t value)
+    {
+        switch (addr)
+        {
+        case 0x4008:
+            length_counter.halt = control_flag = value & 0x80;
+            linear_counter_reload = value & 0x7F;
+            break;
+        case 0x400A:
+            timer_period &= 0xFF00;
+            timer_period |= value;
+            break;
+        case 0x400B:
+            length_counter.load(value >> 3);
+            timer_period &= 0x00FF;
+            timer_period |= (value & 7) << 8;
+            reload_flag = true;
+            break;
+        }
     }
 
     uint8_t triangle_channel_t::get_sample() const
     {
-        return 0;
+        if (!debug_enabled)
+        {
+            return 0;
+        }
+        else
+        {
+            return SEQUENCE_LUT[sequencer];
+        }
     }
 
     noise_channel_t::noise_channel_t()
@@ -175,7 +219,7 @@ namespace nes
             length_counter.halt = value & 0x20;
             break;
         case 0x400E:
-            timer_period = NOISE_TIMER_LUT[value & 0x0F];
+            timer_period = TIMER_LUT[value & 0x0F];
             mode = value & 0x80;
             break;
         case 0x400F:
@@ -260,7 +304,7 @@ namespace nes
         case 0x4008:
         case 0x400A:
         case 0x400B:
-            SPDLOG_WARN("APU triangle write 0x{:02X} stubbed", value);
+            triangle.write(addr, value);
             return true;
         case 0x400C:
         case 0x400E:
@@ -322,7 +366,7 @@ namespace nes
             else if (frame_counter_ctrl.sequence_mode == 1 && clock_sequencer >= 18640)
             {
                 clock_quarter_frame();
-                clock_half_frame    ();
+                clock_half_frame();
                 clock_sequencer = 0xFFFF;
             }
         }
@@ -333,12 +377,26 @@ namespace nes
         pulse1.envelope.clock();
         pulse2.envelope.clock();
         noise.envelope.clock();
+
+        if (triangle.reload_flag)
+        {
+            triangle.linear_counter = triangle.linear_counter_reload;
+        }
+        else if (triangle.linear_counter > 0)
+        {
+            triangle.linear_counter--;
+        }
+        if (!triangle.control_flag)
+        {
+            triangle.reload_flag = false;
+        }
     }
 
     void apu_t::clock_half_frame()
     {
         pulse1.length_counter.clock();
         pulse2.length_counter.clock();
+        triangle.length_counter.clock();
         noise.length_counter.clock();
     }
 
