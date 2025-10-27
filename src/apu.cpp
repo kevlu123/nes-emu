@@ -17,6 +17,11 @@ namespace nes
         }
     }
 
+    void length_counter_t::load(uint8_t index)
+    {
+        value = LENGTH_COUNTER_LUT[index];
+    }
+
     envelope_t::envelope_t()
         : start_flag(false),
           loop(false),
@@ -55,7 +60,7 @@ namespace nes
         }
     }
 
-    pulse_channel_t::pulse_channel_t() 
+    pulse_channel_t::pulse_channel_t()
         : constant_volume(0),
           volume(0),
           duty(0),
@@ -81,11 +86,9 @@ namespace nes
         switch (addr & 3)
         {
         case 0:
-            envelope.divider_period = value & 0x0F;
-            envelope.loop = value & 0x20;
-            length_counter.halt = value & 0x20;
+            envelope.divider_period = volume = value & 0x0F;
             constant_volume = value & 0x10;
-            volume = value & 0x0F;
+            envelope.loop = length_counter.halt = value & 0x20;
             duty = (value >> 6) & 0x03;
             break;
         case 1:
@@ -96,12 +99,12 @@ namespace nes
             timer_period |= value;
             break;
         case 3:
-            length_counter.value = length_counter_t::LENGTH_COUNTER_LUT[value >> 3];
-            envelope.start_flag = true;
+            length_counter.load(value >> 3);
             timer_period &= 0x00FF;
             timer_period |= (value & 3) << 8;
             timer = timer_period;
             sequencer = 0;
+            envelope.start_flag = true;
             break;
         }
     }
@@ -140,17 +143,64 @@ namespace nes
     }
 
     noise_channel_t::noise_channel_t()
-        : debug_enabled(true)
+        : shift_register(1),
+          constant_volume(false),
+          volume(0),
+          mode(false),
+          timer_period(4),
+          timer(1),
+          debug_enabled(true)
     {
     }
 
     void noise_channel_t::clock()
     {
+        timer--;
+        if (timer == 0)
+        {
+            timer = timer_period;
+            bool mode_bit = mode ? (shift_register & 0x40) : (shift_register & 2);
+            bool new_bit = (shift_register & 1) ^ mode_bit;
+            shift_register = (new_bit << 14) | (shift_register >> 1);
+        }
+    }
+
+    void noise_channel_t::write(uint16_t addr, uint8_t value)
+    {
+        switch (addr)
+        {
+        case 0x400C:
+            envelope.divider_period = volume = value & 0x0F;
+            constant_volume = value & 0x10;
+            length_counter.halt = value & 0x20;
+            break;
+        case 0x400E:
+            timer_period = NOISE_TIMER_LUT[value & 0x0F];
+            mode = value & 0x80;
+            break;
+        case 0x400F:
+            length_counter.load(value >> 3);
+            envelope.start_flag = true;
+            break;
+        }
     }
 
     uint8_t noise_channel_t::get_sample() const
     {
-        return 0;
+        if (!debug_enabled ||
+            length_counter.value == 0 ||
+            (shift_register & 1))
+        {
+            return 0;
+        }
+        else if (constant_volume)
+        {
+            return volume;
+        }
+        else
+        {
+            return envelope.decay_level_counter;
+        }
     }
 
     dmc_channel_t::dmc_channel_t()
@@ -215,7 +265,7 @@ namespace nes
         case 0x400C:
         case 0x400E:
         case 0x400F:
-            SPDLOG_WARN("APU noise write 0x{:02X} stubbed", value);
+            noise.write(addr, value);
             return true;
         case 0x4010:
         case 0x4011:
@@ -282,12 +332,14 @@ namespace nes
     {
         pulse1.envelope.clock();
         pulse2.envelope.clock();
+        noise.envelope.clock();
     }
 
     void apu_t::clock_half_frame()
     {
         pulse1.length_counter.clock();
         pulse2.length_counter.clock();
+        noise.length_counter.clock();
     }
 
     float apu_t::get_mixed_sample() const

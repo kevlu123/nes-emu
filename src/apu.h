@@ -13,6 +13,7 @@ namespace nes
 
         length_counter_t();
         void clock();
+        void load(uint8_t index);
 
         bool halt;
         uint8_t value;
@@ -66,10 +67,23 @@ namespace nes
 
     struct noise_channel_t
     {
+        static constexpr uint16_t NOISE_TIMER_LUT[16] = {
+            2, 4, 8, 16, 32, 48, 64, 80, 101, 127, 190, 254, 381, 508, 1017, 2034,
+        };
+
         noise_channel_t();
         void clock();
+        void write(uint16_t addr, uint8_t value);
         uint8_t get_sample() const;
 
+        uint16_t shift_register;
+        bool mode;
+        bool constant_volume;
+        uint8_t volume;
+        uint16_t timer_period;
+        uint16_t timer;
+        length_counter_t length_counter;
+        envelope_t envelope;
         bool debug_enabled;
     };
 
