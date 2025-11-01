@@ -6,13 +6,19 @@ namespace nes
 {
     mapper_t::mapper_t(cart_t& cart)
         : cart(&cart),
-          mirroring(cart.header.mirroring)
+          mirroring(cart.header.mirroring),
+          prg_ram{}
     {
     }
 
-    bool mapper_t::cpu_read(uint16_t addr, uint8_t& value, bool readonly)
+    bool mapper_t::cpu_read(uint16_t addr, uint8_t& value, bool allow_side_effects)
     {
-        if (addr >= 0x8000)
+        if (addr >= 0x6000 && addr < 0x8000)
+        {
+            value = prg_ram[addr - 0x6000];
+            return true;
+        }
+        else if (addr >= 0x8000)
         {
             value = cart->prg_rom[(addr - 0x8000) % cart->prg_rom.size()];
             return true;
@@ -22,10 +28,15 @@ namespace nes
 
     bool mapper_t::cpu_write(uint16_t addr, uint8_t value)
     {
+        if (addr >= 0x6000 && addr < 0x8000)
+        {
+            prg_ram[addr - 0x6000] = value;
+            return true;
+        }
         return false;
     }
 
-    bool mapper_t::ppu_read(uint16_t addr, uint8_t& value, bool readonly)
+    bool mapper_t::ppu_read(uint16_t addr, uint8_t& value, bool allow_side_effects)
     {
         if (addr < 0x2000)
         {

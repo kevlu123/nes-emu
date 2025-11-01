@@ -6,8 +6,8 @@ namespace nes
 {
     nes_t::nes_t()
         : cpu(cpu_bus),
-          ppu(ppu_bus, cpu, oam_dma, screen_buffer),
-          apu(cpu),
+          ppu(ppu_bus, oam_dma, screen_buffer),
+          apu(cpu_bus),
           oam_dma(cpu_bus),
           ppu_clock_count(0),
           screen_buffer{},
@@ -47,6 +47,19 @@ namespace nes
             if (oam_dma.cycles_remaining == 0)
             {
                 cpu.clock();
+                if (cpu.cycles_until_next_instruction == 0)
+                {
+                    if (ppu.nmi)
+                    {
+                        cpu.nmi();
+                        ppu.nmi = false;
+                    }
+                    else if (apu.dmc.irq || apu.frame_irq)
+                    {
+                        cpu.irq();
+                        // IRQ will be cleared by the program
+                    }
+                }
             }
             oam_dma.clock();
             apu.clock();

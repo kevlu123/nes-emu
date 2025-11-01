@@ -5,11 +5,9 @@
 namespace nes
 {
     ppu_t::ppu_t(bus_t& ppu_bus,
-                 cpu_t& cpu,
                  oam_dma_t& oam_dma,
                  uint8_t* screen_buffer)
         : ppu_bus(&ppu_bus),
-          cpu(&cpu),
           oam_dma(&oam_dma),
           screen_buffer(screen_buffer),
           ppuctrl{},
@@ -18,6 +16,7 @@ namespace nes
           v_vram_addr{},
           t_vram_addr{},
           x_scroll{},
+          nmi(false),
           write_toggle(false),
           ppudata_read_buffer(0),
           oam_addr(0),
@@ -51,7 +50,7 @@ namespace nes
     void ppu_t::reset()
     {
         cart_t *cart = this->cart;
-        *this = ppu_t(*ppu_bus, *cpu, *oam_dma, screen_buffer);
+        *this = ppu_t(*ppu_bus, *oam_dma, screen_buffer);
         set_cart(cart);
     }
 
@@ -60,7 +59,7 @@ namespace nes
         this->cart = cart;
     }
 
-    bool ppu_t::cpu_read(uint16_t addr, uint8_t& value, bool readonly)
+    bool ppu_t::cpu_read(uint16_t addr, uint8_t& value, bool allow_side_effects)
     {
         if (addr >= 0x2000 && addr <= 0x3FFF)
         {
@@ -71,7 +70,7 @@ namespace nes
         {
             // PPUSTATUS
             value = ppustatus.reg;
-            if (!readonly)
+            if (allow_side_effects)
             {
                 ppustatus.vblank = 0;
                 write_toggle = false;
@@ -95,7 +94,7 @@ namespace nes
         {
             // PPUDATA
             value = ppudata_read_buffer;
-            if (!readonly)
+            if (allow_side_effects)
             {
                 ppudata_read_buffer = ppu_bus->read(v_vram_addr.reg);
                 v_vram_addr.reg += ppuctrl.vram_addr_increment ? 32 : 1;
@@ -123,7 +122,7 @@ namespace nes
                 if (ppustatus.vblank &&
                     !vblank_nmi_enable && ppuctrl.vblank_nmi_enable)
                 {
-                    cpu->nmi();
+                    nmi = true;
                 }
             }
             return true;
@@ -199,7 +198,7 @@ namespace nes
         return false;
     }
 
-    bool ppu_t::ppu_read(uint16_t addr, uint8_t& value, bool readonly)
+    bool ppu_t::ppu_read(uint16_t addr, uint8_t& value, bool allow_side_effects)
     {
         if (addr >= 0x2000 && addr <= 0x3EFF)
         {
@@ -531,7 +530,7 @@ namespace nes
             ppustatus.vblank = 1;
             if (ppuctrl.vblank_nmi_enable)
             {
-                cpu->nmi();
+                nmi = true;
             }
         }
 

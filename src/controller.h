@@ -9,7 +9,7 @@ namespace nes
         controller_t();
         void reset();
 
-        bool read(uint16_t addr, uint8_t& value, bool readonly);
+        bool read(uint16_t addr, uint8_t& value, bool allow_side_effects);
         bool write(uint16_t addr, uint8_t value);
 
         union button_state_t

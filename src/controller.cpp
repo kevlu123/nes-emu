@@ -14,12 +14,12 @@ namespace nes
         *this = controller_t();
     }
 
-    bool controller_t::read(uint16_t addr, uint8_t& value, bool readonly)
+    bool controller_t::read(uint16_t addr, uint8_t& value, bool allow_side_effects)
     {
         if (addr == 0x4016)
         {
             value = (status_shift_reg[0] & 1) | 0x40;
-            if (!readonly)
+            if (allow_side_effects)
             {
                 status_shift_reg[0] = (status_shift_reg[0] >> 1) | 0x80;
             }
@@ -28,7 +28,7 @@ namespace nes
         else if (addr == 0x4017)
         {
             value = (status_shift_reg[1] & 1) | 0x40;
-            if (!readonly)
+            if (allow_side_effects)
             {
                 status_shift_reg[1] = (status_shift_reg[1] >> 1) | 0x80;
             }

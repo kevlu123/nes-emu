@@ -136,6 +136,7 @@ namespace nes
           timer_period(0),
           timer(0),
           sequencer(0),
+          debug_output_zero_when_stopped(false),
           debug_enabled(true)
     {
     }
@@ -146,7 +147,7 @@ namespace nes
         if (timer == 0xFFFF)
         {
             timer = timer_period;
-            if (timer_period >= 2 && linear_counter > 0 && length_counter.value > 0)
+            if (is_running())
             {
                 sequencer = (sequencer + 1) % 32;
             }
@@ -176,7 +177,7 @@ namespace nes
 
     uint8_t triangle_channel_t::get_sample() const
     {
-        if (!debug_enabled)
+        if (!is_running() && debug_output_zero_when_stopped)
         {
             return 0;
         }
@@ -186,12 +187,17 @@ namespace nes
         }
     }
 
+    bool triangle_channel_t::is_running() const
+    {
+        return debug_enabled && timer_period >= 2 && linear_counter > 0 && length_counter.value > 0;
+    }
+
     noise_channel_t::noise_channel_t()
         : shift_register(1),
           constant_volume(false),
           volume(0),
           mode(false),
-          timer_period(4),
+          timer_period(2),
           timer(1),
           debug_enabled(true)
     {
@@ -247,39 +253,155 @@ namespace nes
         }
     }
 
-    dmc_channel_t::dmc_channel_t()
-        : debug_enabled(true)
+    dmc_channel_t::dmc_channel_t(bus_t& cpu_bus)
+        : cpu_bus(&cpu_bus),
+          sample_buffer_full(false),
+          sample_buffer(0),
+          sample_address(0),
+          sample_length(0),
+          loop(false),
+          interrupt_enabled(false),
+          dma_addr(0x8000),
+          dma_remaining(0),
+          shift_register(0),
+          shift_register_bit_count(0),
+          silence_flag(false),
+          output_level(0),
+          timer_period(214),
+          timer(1),
+          irq(false),
+          debug_enabled(true)
     {
     }
 
     void dmc_channel_t::clock()
     {
+        timer--;
+        if (timer == 0)
+        {
+            timer = timer_period;
+
+            if (!silence_flag)
+            {
+                if ((shift_register & 1) == 0 && output_level >= 2)
+                {
+                    output_level -= 2;
+                }
+                else if ((shift_register & 1) == 1 && output_level <= 125)
+                {
+                    output_level += 2;
+                }
+            }
+
+            shift_register >>= 1;
+            shift_register_bit_count--;
+
+            // Output cycle end
+            if (shift_register_bit_count == 0)
+            {
+                shift_register_bit_count = 8;
+                silence_flag = !sample_buffer_full;
+                if (sample_buffer_full)
+                {
+                    shift_register = sample_buffer;
+                    sample_buffer_full = false;
+                }
+            }
+        }
+
+        // DMA
+        if (!sample_buffer_full && dma_remaining > 0)
+        {
+            sample_buffer = cpu_bus->read(dma_addr, sample_buffer);
+            sample_buffer_full = true;
+            dma_addr = (dma_addr + 1) | 0x8000;
+            dma_remaining--;
+            if (dma_remaining == 0)
+            {
+                if (loop)
+                {
+                    start();
+                }
+                else if (interrupt_enabled)
+                {
+                    irq = true;
+                }
+            }
+        }
+    }
+
+    void dmc_channel_t::write(uint16_t addr, uint8_t value)
+    {
+        switch (addr)
+        {
+        case 0x4010:
+            timer_period = TIMER_LUT[value & 0x0F];
+            loop = value & 0x40;
+            interrupt_enabled = value & 0x80;
+            if (!interrupt_enabled)
+            {
+                irq = false;
+            }
+            break;
+        case 0x4011:
+            output_level = value & 0x7F;
+            break;
+        case 0x4012:
+            sample_address = 0xC000 + (value * 64);
+            break;
+        case 0x4013:
+            sample_length = (value * 16) + 1;
+            break;
+        }
+    }
+
+    void dmc_channel_t::start()
+    {
+        dma_addr = sample_address;
+        dma_remaining = sample_length;
     }
 
     uint8_t dmc_channel_t::get_sample() const
     {
-        return 0;
+        return debug_enabled ? output_level : 0;
     }
 
-    apu_t::apu_t(cpu_t& cpu)
-        : cpu(&cpu),
-          clock_sequencer(0),
+    apu_t::apu_t(bus_t& cpu_bus)
+        : dmc(cpu_bus),
+          pulse1_enabled(false),
+          pulse2_enabled(false),
+          triangle_enabled(false),
+          noise_enabled(false),
           even_clock(false),
-          debug_enabled(true)
+          clock_sequencer(0),
+          frame_counter_interrupt_inhibit(false),
+          frame_counter_sequence_mode(false),
+          frame_irq(false),
+          debug_enabled(true),
+          cpu_bus(&cpu_bus)
     {
     }
 
     void apu_t::reset()
     {
-        *this = apu_t(*cpu);
+        *this = apu_t(*cpu_bus);
     }
 
-    bool apu_t::read(uint16_t addr, uint8_t& value, bool readonly)
+    bool apu_t::read(uint16_t addr, uint8_t& value, bool allow_side_effects)
     {
         if (addr == 0x4015)
         {
-            SPDLOG_WARN("APU read 0x4015 stubbed");
-            value = 0;
+            value = (0x01 * (pulse1.length_counter.value > 0 && pulse1_enabled))
+                  | (0x02 * (pulse2.length_counter.value > 0 && pulse2_enabled))
+                  | (0x04 * (triangle.length_counter.value > 0 && triangle_enabled))
+                  | (0x08 * (noise.length_counter.value > 0 && noise_enabled))
+                  | (0x10 * (dmc.dma_remaining > 0))
+                  | (0x40 * frame_irq)
+                  | (0x80 * dmc.irq);
+            if (allow_side_effects)
+            {
+                frame_irq = false;
+            }
             return true;
         }
         return false;
@@ -315,13 +437,29 @@ namespace nes
         case 0x4011:
         case 0x4012:
         case 0x4013:
-            SPDLOG_WARN("APU DMC write 0x{:02X} stubbed", value);
+            dmc.write(addr, value);
             return true;
         case 0x4015:
-            SPDLOG_WARN("APU write 0x4015 stubbed");
+            pulse1_enabled = value & 0x01;
+            pulse2_enabled = value & 0x02;
+            triangle_enabled = value & 0x04;
+            noise_enabled = value & 0x08;
+            if (value & 0x10)
+            {
+                dmc.start();
+            }
+            else
+            {
+                dmc.dma_remaining = 0;
+            }
             return true;
         case 0x4017:
-            frame_counter_ctrl.reg = value;
+            frame_counter_interrupt_inhibit = value & 0x40;
+            frame_counter_sequence_mode = value & 0x80;
+            if (frame_counter_interrupt_inhibit)
+            {
+                frame_irq = false;
+            }
             return true;
         default:
             return false;
@@ -353,17 +491,17 @@ namespace nes
             {
                 clock_quarter_frame();
             }
-            else if (frame_counter_ctrl.sequence_mode == 0 && clock_sequencer >= 14914)
+            else if (frame_counter_sequence_mode == 0 && clock_sequencer >= 14914)
             {
                 clock_quarter_frame();
                 clock_half_frame();
                 clock_sequencer = 0xFFFF;
-                if (!frame_counter_ctrl.interrupt_inhibit)
+                if (!frame_counter_interrupt_inhibit)
                 {
-                    cpu->irq();
+                    frame_irq = true;
                 }
             }
-            else if (frame_counter_ctrl.sequence_mode == 1 && clock_sequencer >= 18640)
+            else if (frame_counter_sequence_mode == 1 && clock_sequencer >= 18640)
             {
                 clock_quarter_frame();
                 clock_half_frame();
@@ -423,6 +561,7 @@ namespace nes
                 + ((float)dmc.get_sample() / 22638.0f))));
         }
 
-        return pulse_out + tnd_out;
+        float mixed = pulse_out + tnd_out;
+        return mixed > 1.0f ? 1.0f : mixed;
     }
 }

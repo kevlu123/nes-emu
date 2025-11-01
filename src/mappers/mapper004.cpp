@@ -5,8 +5,7 @@
 namespace nes
 {
     mapper004_t::mapper004_t(cart_t& cart)
-        : mapper_t(cart),
-          prg_ram(0x2000)
+        : mapper_t(cart)
     {
     }
 

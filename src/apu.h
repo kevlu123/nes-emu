@@ -59,16 +59,17 @@ namespace nes
     struct triangle_channel_t
     {
         static constexpr uint8_t SEQUENCE_LUT[32] = {
-            15, 14, 13, 12, 11, 10, 9, 8,
-            7,  6,  5,  4,  3,  2, 1, 0,
-            0,  1,  2,  3,  4,  5, 6, 7,
-            8,  9, 10, 11, 12, 13,14,15,
+            15, 14, 13, 12, 11, 10,  9,  8,
+             7,  6,  5,  4,  3,  2,  1,  0,
+             0,  1,  2,  3,  4,  5,  6,  7,
+             8,  9, 10, 11, 12, 13, 14, 15,
         };
 
         triangle_channel_t();
         void clock();
         void write(uint16_t addr, uint8_t value);
         uint8_t get_sample() const;
+        bool is_running() const;
 
         bool reload_flag;
         bool control_flag;
@@ -78,13 +79,15 @@ namespace nes
         uint16_t timer;
         uint8_t sequencer;
         length_counter_t length_counter;
+        bool debug_output_zero_when_stopped;
         bool debug_enabled;
     };
 
     struct noise_channel_t
     {
         static constexpr uint16_t TIMER_LUT[16] = {
-            2, 4, 8, 16, 32, 48, 64, 80, 101, 127, 190, 254, 381, 508, 1017, 2034,
+              2,   4,   8,  16,  32,  48,   64,   80,
+            101, 127, 190, 254, 381, 508, 1017, 2034,
         };
 
         noise_channel_t();
@@ -105,46 +108,68 @@ namespace nes
 
     struct dmc_channel_t
     {
-        dmc_channel_t();
+        static constexpr uint16_t TIMER_LUT[16] = {
+            214, 190, 170, 160, 143, 127, 113, 107,
+             95,  80,  71,  64,  53,  42,  36,  27,
+        };
+
+        dmc_channel_t(bus_t& cpu_bus);
         void clock();
+        void write(uint16_t addr, uint8_t value);
+        void start();
         uint8_t get_sample() const;
 
+        bool sample_buffer_full;
+        uint8_t sample_buffer;
+        uint16_t sample_address;
+        uint16_t sample_length;
+        bool loop;
+        bool interrupt_enabled;
+        uint16_t dma_addr;
+        uint16_t dma_remaining;
+        uint8_t shift_register;
+        uint8_t shift_register_bit_count;
+        bool silence_flag;
+        uint8_t output_level;
+        uint16_t timer_period;
+        uint16_t timer;
+        bool irq;
         bool debug_enabled;
+
+    private:
+        bus_t* cpu_bus;
     };
 
     struct apu_t
     {
-        apu_t(cpu_t& cpu);
+        apu_t(bus_t& cpu_bus);
         void reset();
-        bool read(uint16_t addr, uint8_t& value, bool readonly);
+        bool read(uint16_t addr, uint8_t& value, bool allow_side_effects);
         bool write(uint16_t addr, uint8_t value);
         void clock();
         void clock_quarter_frame();
         void clock_half_frame();
         float get_mixed_sample() const;
 
-        union
-        {
-            struct
-            {
-                uint8_t unused : 6;
-                uint8_t interrupt_inhibit : 1;
-                uint8_t sequence_mode : 1;
-            };
-            uint8_t reg;
-        } frame_counter_ctrl;
-
         pulse_channel_t pulse1;
         pulse_channel_t pulse2;
         triangle_channel_t triangle;
         noise_channel_t noise;
         dmc_channel_t dmc;
+        bool pulse1_enabled;
+        bool pulse2_enabled;
+        bool triangle_enabled;
+        bool noise_enabled;
 
-        uint16_t clock_sequencer;
         bool even_clock;
+        uint16_t clock_sequencer;
+        bool frame_counter_interrupt_inhibit;
+        bool frame_counter_sequence_mode;
+        bool frame_irq;
+
         bool debug_enabled;
 
     private:
-        cpu_t *cpu;
+        bus_t* cpu_bus;
     };
 }

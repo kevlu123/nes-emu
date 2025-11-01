@@ -108,7 +108,6 @@ namespace nes
         cycles_until_next_instruction = 8;
     }
 
-
     void cpu_t::clock()
     {
         if (cycles_until_next_instruction == 0)

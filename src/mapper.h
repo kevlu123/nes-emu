@@ -15,9 +15,9 @@ namespace nes
         virtual ~mapper_t() = default;
         virtual void reset() = 0;
 
-        virtual bool cpu_read(uint16_t addr, uint8_t& value, bool readonly);
+        virtual bool cpu_read(uint16_t addr, uint8_t& value, bool allow_side_effects);
         virtual bool cpu_write(uint16_t addr, uint8_t value);
-        virtual bool ppu_read(uint16_t addr, uint8_t& value, bool readonly);
+        virtual bool ppu_read(uint16_t addr, uint8_t& value, bool allow_side_effects);
         virtual bool ppu_write(uint16_t addr, uint8_t value);
 
         size_t get_prg_bank_count(uint32_t bank_size) const;
@@ -25,5 +25,6 @@ namespace nes
 
         cart_t* cart;
         mirroring_t mirroring;
+        uint8_t prg_ram[0x2000];
     };
 }

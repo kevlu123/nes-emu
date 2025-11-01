@@ -10,7 +10,7 @@ namespace nes
 
         ram_t();
         void reset();
-        bool read(uint16_t addr, uint8_t& value, bool readonly);
+        bool read(uint16_t addr, uint8_t& value, bool allow_side_effects);
         bool write(uint16_t addr, uint8_t value);
 
         uint8_t data[RAM_SIZE];

@@ -17,11 +17,11 @@ namespace nes
                 .callback = [](
                     uint16_t addr,
                     uint8_t& value,
-                    bool readonly,
+                    bool allow_side_effects,
                     void* ctx)
                 {
                     T* typed_ctx = (T*)ctx;
-                    return (typed_ctx->*Read)(addr, value, readonly);
+                    return (typed_ctx->*Read)(addr, value, allow_side_effects);
                 },
                 .ctx = obj,
             });
@@ -43,14 +43,14 @@ namespace nes
         void disconnect_read(void* obj);
         void disconnect_write(void* obj);
 
-        uint8_t read(uint16_t addr, bool readonly = false);
+        uint8_t read(uint16_t addr, bool allow_side_effects = true);
         void write(uint16_t addr, uint8_t value);
 
     private:
         using bus_read_t = bool (*)(
             uint16_t addr,
             uint8_t& value,
-            bool readonly,
+            bool allow_side_effects,
             void* ctx);
         using bus_write_t = bool (*)(uint16_t addr, uint8_t value, void* ctx);
 

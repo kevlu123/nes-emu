@@ -105,9 +105,9 @@ namespace nes
         mapper->reset();
     }
 
-    bool cart_t::cpu_read(uint16_t addr, uint8_t& value, bool readonly)
+    bool cart_t::cpu_read(uint16_t addr, uint8_t& value, bool allow_side_effects)
     {
-        return mapper->cpu_read(addr, value, readonly);
+        return mapper->cpu_read(addr, value, allow_side_effects);
     }
 
     bool cart_t::cpu_write(uint16_t addr, uint8_t value)
@@ -115,9 +115,9 @@ namespace nes
         return mapper->cpu_write(addr, value);
     }
 
-    bool cart_t::ppu_read(uint16_t addr, uint8_t& value, bool readonly)
+    bool cart_t::ppu_read(uint16_t addr, uint8_t& value, bool allow_side_effects)
     {
-        return mapper->ppu_read(addr, value, readonly);
+        return mapper->ppu_read(addr, value, allow_side_effects);
     }
 
     bool cart_t::ppu_write(uint16_t addr, uint8_t value)

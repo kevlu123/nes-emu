@@ -28,7 +28,6 @@ namespace nes
         } bank_select;
         uint8_t map_regs[8];
         mirroring_t mirroring;
-        std::vector<uint8_t> prg_ram;
 
     private:
         size_t map_prg(uint16_t addr);

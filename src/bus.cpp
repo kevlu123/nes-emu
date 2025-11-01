@@ -36,21 +36,17 @@ namespace nes
         SPDLOG_ERROR("bus_t::disconnect_write failed");
     }
 
-    uint8_t bus_t::read(uint16_t addr, bool readonly)
+    uint8_t bus_t::read(uint16_t addr, bool allow_side_effects)
     {
         addr &= mask;
         for (const auto& reader : readers)
         {
-            if (reader.callback(addr, last_read, readonly, reader.ctx))
+            if (reader.callback(addr, last_read, allow_side_effects, reader.ctx))
             {
                 return last_read;
             }
         }
-        if (readonly)
-        {
-            return 0;
-        }
-        else
+        if (allow_side_effects)
         {
             if (addr == 0xFFFC || addr == 0xFFFD)
             {
@@ -65,6 +61,7 @@ namespace nes
             }
             return last_read;
         }
+        return 0;
     }
 
     void bus_t::write(uint16_t addr, uint8_t value)

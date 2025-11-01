@@ -51,9 +51,9 @@ namespace nes
         void reset();
 
         mirroring_t get_mirroring() const;
-        bool cpu_read(uint16_t addr, uint8_t& value, bool readonly);
+        bool cpu_read(uint16_t addr, uint8_t& value, bool allow_side_effects);
         bool cpu_write(uint16_t addr, uint8_t value);
-        bool ppu_read(uint16_t addr, uint8_t& value, bool readonly);
+        bool ppu_read(uint16_t addr, uint8_t& value, bool allow_side_effects);
         bool ppu_write(uint16_t addr, uint8_t value);
 
         ines_header_t header;
