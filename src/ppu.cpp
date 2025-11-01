@@ -399,6 +399,11 @@ namespace nes
             v_vram_addr.fine_y_scroll = t_vram_addr.fine_y_scroll;
         }
 
+        if (dot == 260 && scanline < SCREEN_HEIGHT && rendering_enabled && cart)
+        {
+            cart->mapper->on_scanline();
+        }
+
         if (((dot >= 1 && dot <= 256) || (dot >= 321 && dot <= 336))
             && rendering_enabled)
         {

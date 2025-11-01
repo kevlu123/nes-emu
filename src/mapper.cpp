@@ -7,6 +7,7 @@ namespace nes
     mapper_t::mapper_t(cart_t& cart)
         : cart(&cart),
           mirroring(cart.header.mirroring),
+          irq(false),
           prg_ram{}
     {
     }
@@ -54,6 +55,10 @@ namespace nes
             return true;
         }
         return false;
+    }
+
+    void mapper_t::on_scanline()
+    {
     }
 
     size_t mapper_t::get_prg_bank_count(uint32_t bank_size) const

@@ -54,7 +54,7 @@ namespace nes
                         cpu.nmi();
                         ppu.nmi = false;
                     }
-                    else if (apu.dmc.irq || apu.frame_irq)
+                    else if (apu.dmc.irq || apu.frame_irq || (cart && cart->mapper->irq))
                     {
                         cpu.irq();
                         // IRQ will be cleared by the program

@@ -8,11 +8,11 @@ namespace nes
     {
         mapper004_t(cart_t& cart);
         void reset() override;
-
         bool cpu_read(uint16_t addr, uint8_t& value, bool readonly) override;
         bool cpu_write(uint16_t addr, uint8_t value) override;
         bool ppu_read(uint16_t addr, uint8_t& value, bool readonly) override;
         bool ppu_write(uint16_t addr, uint8_t value) override;
+        void on_scanline() override;
 
         union
         {
@@ -27,6 +27,10 @@ namespace nes
             uint8_t reg;
         } bank_select;
         uint8_t map_regs[8];
+        uint8_t irq_latch;
+        uint8_t irq_counter;
+        uint8_t irq_enabled;
+        bool irq_reload;
         mirroring_t mirroring;
 
     private:

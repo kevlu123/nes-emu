@@ -5,7 +5,14 @@
 namespace nes
 {
     mapper004_t::mapper004_t(cart_t& cart)
-        : mapper_t(cart)
+        : mapper_t(cart),
+          bank_select{},
+          map_regs{},
+          irq_latch(0),
+          irq_counter(0),
+          irq_enabled(0),
+          irq_reload(false),
+          mirroring(mirroring_t::horizontal)
     {
     }
 
@@ -62,22 +69,23 @@ namespace nes
         {
             if (addr % 2 == 0)
             {
-                // TODO: IRQ latch
+                irq_latch = value;
             }
             else
             {
-                // TODO: IRQ reload
+                irq_reload = true;
             }
         }
         else if (addr >= 0xE000 && addr <= 0xFFFF)
         {
             if (addr % 2 == 0)
             {
-                // TODO: IRQ disable
+                irq_enabled = false;
+                irq = false;
             }
             else
             {
-                // TODO: IRQ enable
+                irq_enabled = true;
             }
         }
         else
@@ -107,6 +115,24 @@ namespace nes
             return true;
         }
         return false;
+    }
+
+    void mapper004_t::on_scanline()
+    {
+        if (irq_counter == 0 || irq_reload)
+        {
+            irq_counter = irq_latch;
+            irq_reload = false;
+        }
+        else
+        {
+            irq_counter--;
+        }
+
+        if (irq_counter == 0 && irq_enabled)
+        {
+            irq = true;
+        }
     }
 
     size_t mapper004_t::map_prg(uint16_t addr)
