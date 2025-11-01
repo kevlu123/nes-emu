@@ -763,7 +763,7 @@ static void show_apu()
 
     ImGui::Checkbox("Triangle", &context.nes->apu.triangle.debug_enabled);
     ImGui::SameLine();
-    ImGui::Checkbox("zero when stopped", &context.nes->apu.triangle.debug_output_zero_when_stopped);
+    ImGui::Checkbox("Zero when stopped", &context.nes->apu.triangle.debug_output_zero_when_stopped);
     ImGui::Image(context.debug_triangle.texture, { APU_DEBUG_WIDTH, context.debug_triangle.height });
 
     ImGui::Checkbox("Noise", &context.nes->apu.noise.debug_enabled);

@@ -60,8 +60,9 @@ namespace nes
         }
     }
 
-    pulse_channel_t::pulse_channel_t()
-        : constant_volume(0),
+    pulse_channel_t::pulse_channel_t(bool is_pulse2)
+        : sweep{},
+          constant_volume(0),
           volume(0),
           duty(0),
           sequencer(0),
@@ -69,6 +70,7 @@ namespace nes
           timer(0),
           debug_enabled(true)
     {
+        sweep.is_pulse2 = is_pulse2;
     }
 
     void pulse_channel_t::clock()
@@ -78,6 +80,28 @@ namespace nes
         {
             timer = timer_period;
             sequencer = (sequencer + 1) % 8;
+        }
+    }
+
+    void pulse_channel_t::clock_sweep()
+    {
+        uint16_t target_period;
+        if (sweep.divider == 0 &&
+            sweep.enabled &&
+            sweep.shift > 0 &&
+            !is_sweeper_muting(&target_period))
+        {
+            timer_period = target_period;
+        }
+
+        if (sweep.divider == 0 || sweep.reload)
+        {
+            sweep.divider = sweep.period;
+            sweep.reload = false;
+        }
+        else
+        {
+            sweep.divider--;
         }
     }
 
@@ -92,7 +116,11 @@ namespace nes
             duty = (value >> 6) & 0x03;
             break;
         case 1:
-            SPDLOG_WARN("APU pulse sweep write 0x{:02X} stubbed", value);
+            sweep.shift = value & 0x07;
+            sweep.negate = value & 0x08;
+            sweep.period = (value >> 4) & 0x07;
+            sweep.enabled = value & 0x80;
+            sweep.reload = true;
             break;
         case 2:
             timer_period &= 0xFF00;
@@ -113,7 +141,7 @@ namespace nes
     {
         if (!debug_enabled ||
             length_counter.value == 0 ||
-            timer_period < 8 ||
+            is_sweeper_muting() ||
             !SEQUENCE_LUT[duty][sequencer])
         {
             return 0;
@@ -126,6 +154,36 @@ namespace nes
         {
             return envelope.decay_level_counter;
         }
+    }
+
+    bool pulse_channel_t::is_sweeper_muting(uint16_t *target_period) const
+    {
+        int tp;
+        uint16_t change_amount = timer_period >> sweep.shift;
+        if (sweep.negate)
+        {
+            if (sweep.is_pulse2)
+            {
+                tp = timer_period + (-change_amount - 1);
+            }
+            else
+            {
+                tp = timer_period - change_amount;
+            }
+            if (tp < 0)
+            {
+                tp = 0;
+            }
+        }
+        else
+        {
+            tp = timer_period + change_amount;
+        }
+        if (target_period)
+        {
+            *target_period = tp;
+        }
+        return timer_period < 8 || tp > 0x7FF;
     }
 
     triangle_channel_t::triangle_channel_t()
@@ -367,7 +425,9 @@ namespace nes
     }
 
     apu_t::apu_t(bus_t& cpu_bus)
-        : dmc(cpu_bus),
+        : pulse1(false),
+          pulse2(true),
+          dmc(cpu_bus),
           pulse1_enabled(false),
           pulse2_enabled(false),
           triangle_enabled(false),
@@ -411,6 +471,10 @@ namespace nes
     {
         switch (addr)
         {
+        case 0x4009:
+        case 0x400D:
+            // Unused registers
+            return true;
         case 0x4000:
         case 0x4001:
         case 0x4002:
@@ -533,7 +597,9 @@ namespace nes
     void apu_t::clock_half_frame()
     {
         pulse1.length_counter.clock();
+        pulse1.clock_sweep();
         pulse2.length_counter.clock();
+        pulse2.clock_sweep();
         triangle.length_counter.clock();
         noise.length_counter.clock();
     }

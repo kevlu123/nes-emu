@@ -31,6 +31,19 @@ namespace nes
         uint8_t decay_level_counter;
     };
 
+    struct sweep_t
+    {
+        sweep_t(bool is_pulse2);;
+        void clock();
+
+        bool enabled;
+        uint8_t period;
+        bool negate;
+        uint8_t shift;
+        uint8_t divider;
+        bool reload;
+    };
+
     struct pulse_channel_t
     {
         static constexpr bool SEQUENCE_LUT[4][8] = {
@@ -40,10 +53,23 @@ namespace nes
 			{ 1, 0, 0, 1, 1, 1, 1, 1 }, // 25% negated
         };
 
-        pulse_channel_t();
+        pulse_channel_t(bool is_pulse2);
         void clock();
+        void clock_sweep();
         void write(uint16_t addr, uint8_t value);
         uint8_t get_sample() const;
+        bool is_sweeper_muting(uint16_t *target_period = nullptr) const;
+
+        struct
+        {
+            bool enabled;
+            uint8_t period;
+            bool negate;
+            uint8_t shift;
+            uint8_t divider;
+            bool reload;
+            bool is_pulse2;
+        } sweep;
 
         bool constant_volume;
         uint8_t volume;
