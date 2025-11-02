@@ -9,7 +9,7 @@
 #include "cart.h"
 #include "oam_dma.h"
 
-#include <optional>
+#include <memory>
 #include <functional>
 
 namespace nes
@@ -22,7 +22,7 @@ namespace nes
         void clock_instruction(std::function<void()> on_clock);
         void clock_frame(std::function<void()> on_clock);
         void unload_cart();
-        void load_cart(cart_t cart);
+        void load_cart(std::unique_ptr<cart_t> cart);
 
         bus_t cpu_bus;
         bus_t ppu_bus;
@@ -33,7 +33,7 @@ namespace nes
         apu_t apu;
         oam_dma_t oam_dma;
         controller_t controller;
-        std::optional<cart_t> cart;
+        std::unique_ptr<cart_t> cart;
 
         uint64_t ppu_clock_count;
 

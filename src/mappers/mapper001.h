@@ -4,33 +4,32 @@
 
 namespace nes
 {
-    struct mapper004_t : mapper_t
+    struct mapper001_t : mapper_t
     {
-        mapper004_t(cart_t& cart);
+        mapper001_t(cart_t& cart);
         void reset() override;
         bool cpu_read(uint16_t addr, uint8_t& value, bool readonly) override;
         bool cpu_write(uint16_t addr, uint8_t value) override;
         bool ppu_read(uint16_t addr, uint8_t& value, bool readonly) override;
         bool ppu_write(uint16_t addr, uint8_t value) override;
-        void on_scanline() override;
+
+        uint8_t shift_register;
 
         union
         {
             struct
             {
-                uint8_t select : 3;
-                uint8_t unused : 2;
-                uint8_t mmc6 : 1;
-                uint8_t prg_mode : 1;
-                uint8_t chr_mode : 1;
+                uint8_t mirroring : 2;
+                uint8_t prg_bank_mode : 2;
+                uint8_t chr_bank_mode : 1;
+                uint8_t unused : 3;
             };
             uint8_t reg;
-        } bank_select;
-        uint8_t map_regs[8];
-        uint8_t irq_latch;
-        uint8_t irq_counter;
-        uint8_t irq_enabled;
-        bool irq_reload;
+        } control;
+
+        uint8_t chr_bank0;
+        uint8_t chr_bank1;
+        uint8_t prg_bank;
 
     private:
         size_t map_prg(uint16_t addr);

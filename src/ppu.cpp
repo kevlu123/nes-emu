@@ -9,6 +9,7 @@ namespace nes
                  uint8_t* screen_buffer)
         : ppu_bus(&ppu_bus),
           oam_dma(&oam_dma),
+          cart(nullptr),
           screen_buffer(screen_buffer),
           ppuctrl{},
           ppumask{},
@@ -220,6 +221,12 @@ namespace nes
             case mirroring_t::vertical:
                 value = nametable[addr & 0x7FF];
                 break;
+            case mirroring_t::one_screen_low:
+                value = nametable[addr & 0x3FF];
+                break;
+            case mirroring_t::one_screen_high:
+                value = nametable[(addr & 0x3FF) | 0x400];
+                break;
             default:
                 SPDLOG_WARN("Mirroring {} not implemented", (int)mirroring);
                 value = nametable[addr & 0x7FF];
@@ -261,6 +268,12 @@ namespace nes
                 break;
             case mirroring_t::vertical:
                 nametable[addr & 0x7FF] = value;
+                break;
+            case mirroring_t::one_screen_low:
+                nametable[addr & 0x3FF] = value;
+                break;
+            case mirroring_t::one_screen_high:
+                nametable[(addr & 0x3FF) | 0x400] = value;
                 break;
             default:
                 SPDLOG_WARN("Mirroring {} not implemented", (int)mirroring);

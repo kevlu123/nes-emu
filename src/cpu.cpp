@@ -75,12 +75,12 @@ namespace nes
     {
         status.i = true;
         status.u = true;
-        pc = cpu_bus.read(0xFFFC) | (cpu_bus.read(0xFFFD) << 8);
     }
 
     void cpu_t::reset()
     {
         *this = cpu_t(*cpu_bus);
+        pc = cpu_bus->read(0xFFFC) | (cpu_bus->read(0xFFFD) << 8);
     }
 
     void cpu_t::irq()

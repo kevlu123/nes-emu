@@ -48,7 +48,7 @@ namespace nes
         }
         if (allow_side_effects)
         {
-            if (addr == 0xFFFC || addr == 0xFFFD)
+            if (addr >= 0xFFFA)
             {
                 SPDLOG_WARN(
                     "({}) No read handler *{:04X} (No cartridge loaded?)",

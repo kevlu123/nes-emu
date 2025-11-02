@@ -7,5 +7,7 @@ namespace nes
     {
         horizontal,
         vertical,
+        one_screen_low,
+        one_screen_high,
     };
 }

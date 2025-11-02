@@ -2,7 +2,7 @@
 #include "pch.h"
 #include "bus.h"
 #include "mirroring.h"
-#include "mapper.h"
+#include "mappers/mapper.h"
 
 #include <vector>
 #include <span>
@@ -10,6 +10,7 @@
 
 namespace nes
 {
+    /* TODO: pack */
     struct ines_header_t
     {
         uint8_t signature[4];
@@ -47,7 +48,11 @@ namespace nes
 
     struct cart_t
     {
-        static bool try_load(std::vector<uint8_t> rom, cart_t& out_cart);
+        cart_t() = default;
+        cart_t(cart_t&&) = delete;
+        cart_t& operator=(cart_t&&) = delete;
+
+        static std::unique_ptr<cart_t> load(std::vector<uint8_t> rom);
         void reset();
 
         mirroring_t get_mirroring() const;

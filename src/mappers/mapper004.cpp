@@ -11,8 +11,7 @@ namespace nes
           irq_latch(0),
           irq_counter(0),
           irq_enabled(0),
-          irq_reload(false),
-          mirroring(mirroring_t::horizontal)
+          irq_reload(false)
     {
     }
 
@@ -28,7 +27,7 @@ namespace nes
         else if (addr >= 0x8000)
         {
             size_t mapped = map_prg(addr);
-            value = cart->prg_rom[mapped];
+            value = cart->prg_rom[mapped % cart->prg_rom.size()];
             return true;
         }
         return false;
@@ -62,7 +61,7 @@ namespace nes
             }
             else
             {
-                // TODO: PRG RAM protect
+                // PRG RAM protect (not implemented)
             }
         }
         else if (addr >= 0xC000 && addr <= 0xDFFF)
@@ -100,7 +99,7 @@ namespace nes
         if (addr < 0x2000)
         {
             size_t mapped = map_chr(addr);
-            value = cart->chr[mapped];
+            value = cart->chr[mapped % cart->chr.size()];
             return true;
         }
         return false;
@@ -111,7 +110,7 @@ namespace nes
         if (addr < 0x2000)
         {
             size_t mapped = map_chr(addr);
-            cart->chr[mapped] = value;
+            cart->chr[mapped % cart->chr.size()] = value;
             return true;
         }
         return false;

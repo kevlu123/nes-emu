@@ -100,11 +100,11 @@ namespace nes
             ppu_bus.disconnect_read(&*cart);
             ppu_bus.disconnect_write(&*cart);
             ppu.set_cart(nullptr);
-            cart = std::nullopt;
+            cart.reset();
         }
     }
 
-    void nes_t::load_cart(cart_t cart)
+    void nes_t::load_cart(std::unique_ptr<cart_t> cart)
     {
         unload_cart();
         this->cart = std::move(cart);

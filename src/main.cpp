@@ -1,5 +1,9 @@
 #include "pch.h"
 
+#include <spdlog/pattern_formatter.h>
+#include <spdlog/sinks/stdout_color_sinks.h>
+#include <spdlog/sinks/callback_sink.h>
+
 #include <SDL3/SDL_main.h>
 #include <SDL3/SDL.h>
 
@@ -16,6 +20,7 @@
 constexpr size_t AUDIO_SAMPLE_RATE = 48000;
 constexpr size_t APU_DEBUG_WIDTH = 1024;
 constexpr size_t MIXER_HISTORY_LENGTH = AUDIO_SAMPLE_RATE * 2;
+constexpr size_t MAX_DEBUG_LOG_LINES = 512;
 
 static constexpr SDL_AudioSpec audio_spec = {
     .format = SDL_AUDIO_F32,
@@ -105,6 +110,12 @@ struct debug_image_t
     uint8_t data[Width * Height] = { 0 };
 };
 
+struct log_msg_t
+{
+    std::string text;
+    ImVec4 colour;
+};
+
 static struct
 {
     SDL_Window* window = nullptr;
@@ -117,6 +128,8 @@ static struct
     bool emulation_running = true;
     int emulation_speed = 1;
 
+    std::deque<log_msg_t> debug_log;
+    bool debug_new_log = false;
     debug_image_t<16, 2> debug_palette;
     debug_image_t<256, 128> debug_pattern_table;
     debug_image_t<512, 512> debug_nametable;
@@ -221,13 +234,6 @@ static void WriteTexture(
         debug_grid);
 }
 
-struct disassembly_t
-{
-    uint16_t addr;
-    std::string opcode;
-    std::string args;
-};
-
 static bool check_window_collapsed()
 {
     if (ImGui::IsWindowCollapsed())
@@ -239,8 +245,38 @@ static bool check_window_collapsed()
     return false;
 }
 
+static void show_log()
+{
+    ImGui::Begin("Log");
+    if (check_window_collapsed())
+    {
+        return;
+    }
+
+    for (const auto& log : context.debug_log)
+    {
+        ImGui::PushStyleColor(ImGuiCol_Text, log.colour);
+        ImGui::TextWrapped(log.text.c_str());
+        ImGui::PopStyleColor();
+    }
+
+    if (context.debug_new_log && ImGui::GetScrollY() >= ImGui::GetScrollMaxY())
+    {
+        ImGui::SetScrollHereY(1.0f);
+        context.debug_new_log = false;
+    }
+    ImGui::End();
+}
+
 static void show_cpu_dism()
 {
+    struct disassembly_t
+    {
+        uint16_t addr;
+        std::string opcode;
+        std::string args;
+    };
+
     ImGui::Begin("CPU");
     if (check_window_collapsed())
     {
@@ -920,35 +956,69 @@ static void handle_key_down(SDL_KeyboardEvent key)
     }
 }
 
-int main(int argc, char* argv[])
+static void load_rom(const char* rom_file)
 {
-    if (argc < 2)
-    {
-        SPDLOG_ERROR("Usage: {} <rom_file>", argv[0]);
-        return -1;
-    }
-    const char* rom_file = argv[1];
-
     std::ifstream rom(rom_file, std::ios::binary | std::ios::ate);
     size_t rom_size = rom.tellg();
     rom.seekg(0, std::ios::beg);
     if (!rom.is_open() || rom_size == 0)
     {
         SPDLOG_ERROR("Failed to open ROM file: {}", rom_file);
-        return -1;
+        return;
     }
     std::vector<uint8_t> rom_data(rom_size);
     rom.read((char*)rom_data.data(), rom_size);
 
-    nes::cart_t cart;
-    if (!nes::cart_t::try_load(std::move(rom_data), cart))
+    auto cart = nes::cart_t::load(std::move(rom_data));
+    if (!cart)
     {
         SPDLOG_ERROR("Failed to load ROM file: {}", rom_file);
-        return -1;
+        return;
     }
+    context.nes->load_cart(std::move(cart));
+}
+
+int main(int argc, char* argv[])
+{
+    auto logger = std::make_shared<spdlog::logger>("logger", spdlog::sinks_init_list{
+        std::make_shared<spdlog::sinks::callback_sink_st>([](const spdlog::details::log_msg& msg)
+        {
+            static spdlog::pattern_formatter formatter("%H:%M:%S.%e [%l] %v");
+            spdlog::memory_buf_t formatted;
+            formatter.format(msg, formatted);
+
+            log_msg_t log;
+            log.text = std::string(formatted.data(), formatted.size());
+
+            log.colour = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
+            switch (msg.level)
+            {
+            case spdlog::level::trace: log.colour = ImVec4(0.5f, 0.5f, 0.5f, 1.0f); break;
+            case spdlog::level::debug: log.colour = ImVec4(0.0f, 1.0f, 1.0f, 1.0f); break;
+            case spdlog::level::info:  log.colour = ImVec4(0.0f, 1.0f, 0.0f, 1.0f); break;
+            case spdlog::level::warn:  log.colour = ImVec4(1.0f, 1.0f, 0.0f, 1.0f); break;
+            case spdlog::level::err:   log.colour = ImVec4(1.0f, 0.0f, 0.0f, 1.0f); break;
+            case spdlog::level::critical: log.colour = ImVec4(1.0f, 0.0f, 1.0f, 1.0f); break;
+            }
+
+            if (context.debug_log.size() >= MAX_DEBUG_LOG_LINES)
+            {
+                context.debug_log.pop_front();
+            }
+            context.debug_log.push_back(std::move(log));
+            context.debug_new_log = true;
+        }),
+        // std::make_shared<spdlog::sinks::stdout_color_sink_mt>(),
+    });
+    spdlog::set_default_logger(logger);
 
     context.nes = std::make_unique<nes::nes_t>();
-    context.nes->load_cart(std::move(cart));
+
+    if (argc >= 2)
+    {
+        const char* rom_file = argv[1];
+        load_rom(rom_file);
+    }
 
     // Initialise SDL
 
@@ -1107,6 +1177,9 @@ int main(int argc, char* argv[])
             case SDL_EVENT_KEY_UP:
                 handle_key_up(event.key);
                 break;
+            case SDL_EVENT_DROP_FILE:
+                load_rom(event.drop.data);
+                break;
             }
         }
 
@@ -1114,7 +1187,7 @@ int main(int argc, char* argv[])
 
         uint64_t current_ticks = SDL_GetTicks();
         uint64_t frames_expected = current_ticks * 60 / 1000;
-        if (context.emulation_running)
+        if (context.emulation_running && context.nes->cart)
         {
             for (int i = 0; i < 5 && frames_run < frames_expected; i++)
             {
@@ -1149,6 +1222,7 @@ int main(int argc, char* argv[])
 
         // Render ImGui
 
+        show_log();
         show_cpu_dism();
         show_ram();
         show_sprites();

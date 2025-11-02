@@ -2,7 +2,6 @@
 #include "pch.h"
 #include "mirroring.h"
 
-#define MAPPER_DEFINE_CTOR(T) T::T(cart_t& cart) : mapper_t(cart) { }
 #define MAPPER_DEFINE_RESET(T) void T::reset() { *this = T(*cart); }
 
 namespace nes

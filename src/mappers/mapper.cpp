@@ -41,7 +41,7 @@ namespace nes
     {
         if (addr < 0x2000)
         {
-            value = cart->chr[addr];
+            value = cart->chr[addr % cart->chr.size()];
             return true;
         }
         return false;
@@ -49,9 +49,9 @@ namespace nes
 
     bool mapper_t::ppu_write(uint16_t addr, uint8_t value)
     {
-        if (addr < 0x2000 && addr < cart->chr_ram.size())
+        if (addr < 0x2000)
         {
-            cart->chr_ram[addr] = value;
+            cart->chr_ram[addr % cart->chr_ram.size()] = value;
             return true;
         }
         return false;

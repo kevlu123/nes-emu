@@ -4,6 +4,10 @@
 
 namespace nes
 {
+    mapper000_t::mapper000_t(cart_t& cart)
+        : mapper_t(cart)
+    {
+    }
+
     MAPPER_DEFINE_RESET(mapper000_t);
-    MAPPER_DEFINE_CTOR(mapper000_t);
 }
