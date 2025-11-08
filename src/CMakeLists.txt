@@ -5,7 +5,7 @@ file(GLOB nes_files
     "**/*.cpp"
 )
 
-add_executable(nes ${nes_files})
+add_executable(nes WIN32 ${nes_files})
 
 target_include_directories(nes
     PRIVATE

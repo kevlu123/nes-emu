@@ -474,6 +474,8 @@ namespace nes
                 if (ppustatus.sprite_zero_hit == 0 && sprite_zero_opaque && bg_pattern != 0 && dot - 1 < 255)
                 {
                     ppustatus.sprite_zero_hit = 1;
+                    debug.sprite_zero_hit_dot = dot - 1;
+                    debug.sprite_zero_hit_scanline = scanline;
                 }
 
                 bool is_fg_palette = found_sprite && ((fg_pattern != 0 && !back_priority) || bg_pattern == 0);

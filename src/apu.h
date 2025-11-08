@@ -79,7 +79,11 @@ namespace nes
         uint16_t timer;
         length_counter_t length_counter;
         envelope_t envelope;
-        bool debug_enabled;
+
+        struct
+        {
+            bool enabled = true;
+        } debug;
     };
 
     struct triangle_channel_t
@@ -105,8 +109,12 @@ namespace nes
         uint16_t timer;
         uint8_t sequencer;
         length_counter_t length_counter;
-        bool debug_output_zero_when_stopped;
-        bool debug_enabled;
+
+        struct
+        {
+            bool enabled = true;
+            bool output_zero_when_stopped = false;
+        } debug;
     };
 
     struct noise_channel_t
@@ -129,7 +137,11 @@ namespace nes
         uint16_t timer;
         length_counter_t length_counter;
         envelope_t envelope;
-        bool debug_enabled;
+
+        struct
+        {
+            bool enabled = true;
+        } debug;
     };
 
     struct dmc_channel_t
@@ -160,7 +172,11 @@ namespace nes
         uint16_t timer_period;
         uint16_t timer;
         bool irq;
-        bool debug_enabled;
+
+        struct
+        {
+            bool enabled = true;
+        } debug;
 
     private:
         bus_t* cpu_bus;
@@ -193,7 +209,10 @@ namespace nes
         bool frame_counter_sequence_mode;
         bool frame_irq;
 
-        bool debug_enabled;
+        struct
+        {
+            bool enabled = true;
+        } debug;
 
     private:
         bus_t* cpu_bus;

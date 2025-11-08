@@ -67,8 +67,7 @@ namespace nes
           duty(0),
           sequencer(0),
           timer_period(0),
-          timer(0),
-          debug_enabled(true)
+          timer(0)
     {
         sweep.is_pulse2 = is_pulse2;
     }
@@ -139,7 +138,7 @@ namespace nes
 
     uint8_t pulse_channel_t::get_sample() const
     {
-        if (!debug_enabled ||
+        if (!debug.enabled ||
             length_counter.value == 0 ||
             is_sweeper_muting() ||
             !SEQUENCE_LUT[duty][sequencer])
@@ -193,9 +192,7 @@ namespace nes
           linear_counter_reload(0),
           timer_period(0),
           timer(0),
-          sequencer(0),
-          debug_output_zero_when_stopped(false),
-          debug_enabled(true)
+          sequencer(0)
     {
     }
 
@@ -235,7 +232,7 @@ namespace nes
 
     uint8_t triangle_channel_t::get_sample() const
     {
-        if (!is_running() && debug_output_zero_when_stopped)
+        if (!is_running() && debug.output_zero_when_stopped)
         {
             return 0;
         }
@@ -247,7 +244,7 @@ namespace nes
 
     bool triangle_channel_t::is_running() const
     {
-        return debug_enabled && timer_period >= 2 && linear_counter > 0 && length_counter.value > 0;
+        return debug.enabled && timer_period >= 2 && linear_counter > 0 && length_counter.value > 0;
     }
 
     noise_channel_t::noise_channel_t()
@@ -256,8 +253,7 @@ namespace nes
           volume(0),
           mode(false),
           timer_period(2),
-          timer(1),
-          debug_enabled(true)
+          timer(1)
     {
     }
 
@@ -295,7 +291,7 @@ namespace nes
 
     uint8_t noise_channel_t::get_sample() const
     {
-        if (!debug_enabled ||
+        if (!debug.enabled ||
             length_counter.value == 0 ||
             (shift_register & 1))
         {
@@ -327,8 +323,7 @@ namespace nes
           output_level(0),
           timer_period(214),
           timer(1),
-          irq(false),
-          debug_enabled(true)
+          irq(false)
     {
     }
 
@@ -421,7 +416,7 @@ namespace nes
 
     uint8_t dmc_channel_t::get_sample() const
     {
-        return debug_enabled ? output_level : 0;
+        return debug.enabled ? output_level : 0;
     }
 
     apu_t::apu_t(bus_t& cpu_bus)
@@ -437,14 +432,25 @@ namespace nes
           frame_counter_interrupt_inhibit(false),
           frame_counter_sequence_mode(false),
           frame_irq(false),
-          debug_enabled(true),
           cpu_bus(&cpu_bus)
     {
     }
 
     void apu_t::reset()
     {
+        auto pulse1_debug = pulse1.debug.enabled;
+        auto pulse2_debug = pulse2.debug.enabled;
+        auto triangle_debug = triangle.debug.enabled;
+        auto noise_debug = noise.debug.enabled;
+        auto dmc_debug = dmc.debug.enabled;
+        auto apu_debug = debug;
         *this = apu_t(*cpu_bus);
+        pulse1.debug.enabled = pulse1_debug;
+        pulse2.debug.enabled = pulse2_debug;
+        triangle.debug.enabled = triangle_debug;
+        noise.debug.enabled = noise_debug;
+        dmc.debug.enabled = dmc_debug;
+        debug = apu_debug;
     }
 
     bool apu_t::read(uint16_t addr, uint8_t& value, bool allow_side_effects)
@@ -606,7 +612,7 @@ namespace nes
 
     float apu_t::get_mixed_sample() const
     {
-        if (!debug_enabled)
+        if (!debug.enabled)
         {
             return 0.0f;
         }

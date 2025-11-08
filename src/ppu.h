@@ -4,6 +4,8 @@
 #include "cart.h"
 #include "oam_dma.h"
 
+#include <optional>
+
 namespace nes
 {
     struct oam_t
@@ -226,6 +228,12 @@ namespace nes
             uint8_t attribute;
             uint8_t priority;
         } sprite_output[8];
+
+        struct
+        {
+            std::optional<int> sprite_zero_hit_dot;
+            std::optional<int> sprite_zero_hit_scanline;
+        } debug;
 
     private:
         bus_t* ppu_bus;
