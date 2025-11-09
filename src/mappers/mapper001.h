@@ -8,6 +8,7 @@ namespace nes
     {
         mapper001_t(cart_t& cart);
         void reset() override;
+        const char* get_name() const override;
         bool cpu_read(uint16_t addr, uint8_t& value, bool readonly) override;
         bool cpu_write(uint16_t addr, uint8_t value) override;
         bool ppu_read(uint16_t addr, uint8_t& value, bool readonly) override;

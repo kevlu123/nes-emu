@@ -39,15 +39,15 @@ namespace nes
     uint8_t bus_t::read(uint16_t addr, bool allow_side_effects)
     {
         addr &= mask;
-        for (const auto& reader : readers)
-        {
-            if (reader.callback(addr, last_read, allow_side_effects, reader.ctx))
-            {
-                return last_read;
-            }
-        }
         if (allow_side_effects)
         {
+            for (const auto& reader : readers)
+            {
+                if (reader.callback(addr, last_read, allow_side_effects, reader.ctx))
+                {
+                    return last_read;
+                }
+            }
             if (addr >= 0xFFFA)
             {
                 SPDLOG_WARN(
@@ -61,7 +61,18 @@ namespace nes
             }
             return last_read;
         }
-        return 0;
+        else
+        {
+            uint8_t read;
+            for (const auto& reader : readers)
+            {
+                if (reader.callback(addr, read, allow_side_effects, reader.ctx))
+                {
+                    return read;
+                }
+            }
+            return 0;
+        }
     }
 
     void bus_t::write(uint16_t addr, uint8_t value)

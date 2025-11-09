@@ -98,11 +98,6 @@ namespace nes
             SPDLOG_ERROR("Unsupported mapper: {}", mapper_number);
             return nullptr;
         }
-
-        SPDLOG_INFO("Loaded ROM");
-        SPDLOG_INFO("    Mapper:       {}", mapper_number);
-        SPDLOG_INFO("    PRG ROM size: {}KB", cart->header.prg_chunks * 16);
-        SPDLOG_INFO("    CHR ROM size: {}KB", cart->header.chr_chunks * 8);
         return cart;
     }
 

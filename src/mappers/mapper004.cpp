@@ -16,6 +16,7 @@ namespace nes
     }
 
     MAPPER_DEFINE_RESET(mapper004_t);
+    MAPPER_DEFINE_NAME(mapper004_t, "MMC3");
 
     bool mapper004_t::cpu_read(uint16_t addr, uint8_t& value, bool readonly)
     {

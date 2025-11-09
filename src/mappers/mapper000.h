@@ -7,5 +7,6 @@ namespace nes
     {
         mapper000_t(cart_t& cart);
         void reset() override;
+        const char* get_name() const override;
     };
 }

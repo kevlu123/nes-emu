@@ -11,6 +11,7 @@ namespace nes
     }
 
     MAPPER_DEFINE_RESET(mapper003_t);
+    MAPPER_DEFINE_NAME(mapper003_t, "CNROM");
 
     bool mapper003_t::cpu_write(uint16_t addr, uint8_t value)
     {

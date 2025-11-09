@@ -10,4 +10,5 @@ namespace nes
     }
 
     MAPPER_DEFINE_RESET(mapper000_t);
+    MAPPER_DEFINE_NAME(mapper000_t, "NROM");
 }

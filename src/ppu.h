@@ -228,11 +228,16 @@ namespace nes
             uint8_t attribute;
             uint8_t priority;
         } sprite_output[8];
+        bool sprite_zero_found;
+        bool sprite_zero_found_next;
 
         struct
         {
             std::optional<int> sprite_zero_hit_dot;
             std::optional<int> sprite_zero_hit_scanline;
+            bool enable_bg = true;
+            bool enable_fg = true;
+            bool enable_greyscale = false;
         } debug;
 
     private:

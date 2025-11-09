@@ -1,4 +1,5 @@
 #include "pch.h"
+#include "imgui_ini.h"
 
 #include <spdlog/pattern_formatter.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
@@ -16,6 +17,7 @@
 #include <fstream>
 #include <deque>
 #include <algorithm>
+#include <filesystem>
 
 constexpr size_t AUDIO_SAMPLE_RATE = 48000;
 constexpr size_t APU_DEBUG_WIDTH = 1024;
@@ -124,9 +126,17 @@ static struct
     SDL_AudioStream *audio_stream = nullptr;
     std::vector<float> new_samples;
     std::unique_ptr<nes::nes_t> nes;
+    SDL_Texture* screen_texture = nullptr;
     float audio_tick_counter = 0;
-    bool emulation_running = true;
-    int emulation_speed = 1;
+
+    struct
+    {
+        bool show_grid = false;
+        bool show_sprite_zero_hit = false;
+        bool pause = false;
+        int emulation_speed = 1;
+        std::string cart_name;
+    } debug_control;
 
     struct
     {
@@ -136,24 +146,23 @@ static struct
 
     struct
     {
-        bool show_grid = false;
-        bool show_sprite_zero_hit = false;
-    } debug_ppu;
-
-    struct
-    {
-        debug_image_t<16, 2> image;
+        debug_image_t<4, 1> images[8];
     } debug_palette;
 
     struct
     {
-        debug_image_t<256, 128> image;
+        debug_image_t<128, 256> image;
     } debug_pattern_table;
 
     struct
     {
         debug_image_t<512, 512> image;
     } debug_nametable;
+
+    struct
+    {
+        debug_image_t<8, 16> images[64];
+    } debug_sprites;
 
     struct
     {
@@ -173,6 +182,11 @@ static struct
         float viewport_max = 0.0f;
     } debug_apu;
 } ctx;
+
+static ImVec2 operator+(const ImVec2& a, const ImVec2& b)
+{
+    return ImVec2{ a.x + b.x, a.y + b.y };
+}
 
 static SDL_Texture* CreateTexture(int width, int height)
 {
@@ -200,7 +214,7 @@ static bool CreateTexture(debug_image_t<Width, Height>& debug_image)
     return debug_image.texture != nullptr;
 }
 
-static void WriteTexture(
+static void write_texture(
     SDL_Texture* texture,
     const uint8_t* colour_indices,
     std::function<void(uint8_t*, int, int, int)> post_process = nullptr)
@@ -236,46 +250,76 @@ static void WriteTexture(
 }
 
 template <size_t Width, size_t Height>
-static void WriteTexture(
+static void write_texture(
     debug_image_t<Width, Height>& debug_image,
     std::function<void(uint8_t*, int, int, int)> post_process = nullptr)
 {
-    WriteTexture(
+    write_texture(
         debug_image.texture,
         debug_image.data,
         post_process);
 }
 
-static bool check_window_collapsed()
+static void draw_centred_image(SDL_Texture* texture)
 {
-    if (ImGui::IsWindowCollapsed())
+    float tex_width, tex_height;
+    SDL_GetTextureSize(texture, &tex_width, &tex_height);
+    float tex_aspect = tex_width / tex_height;
+
+    auto window_size = ImGui::GetContentRegionAvail();
+    float window_width = window_size.x;
+    float window_height = window_size.y;
+    float window_aspect = window_width / window_height;
+
+    SDL_FRect dst_rect;
+    if (window_aspect < tex_aspect)
     {
-        ImGui::SetWindowSize({ 256, 1 });
-        ImGui::End();
-        return true;
+        float new_height = window_width / tex_aspect;
+        dst_rect = {
+            0.0f,
+            (window_height - new_height) / 2.0f,
+            window_width,
+            new_height,
+        };
     }
-    return false;
+    else
+    {
+        float new_width = window_height * tex_aspect;
+        dst_rect = {
+            (window_width - new_width) / 2.0f,
+            0.0f,
+            new_width,
+            window_height,
+        };
+    }
+
+    ImGui::SetCursorPos(ImGui::GetWindowContentRegionMin() + ImVec2{ dst_rect.x, dst_rect.y });
+    ImGui::Image(texture, ImVec2{ dst_rect.w, dst_rect.h });
+}
+
+static void draw_separator()
+{
+    ImGui::Spacing();
+    ImGui::Spacing();
+    ImGui::Spacing();
 }
 
 static void show_log()
 {
-    ImGui::Begin("Log");
-    if (check_window_collapsed())
+    if (ImGui::Begin("Log"))
     {
-        return;
-    }
+        for (const auto& log : ctx.debug_log.logs)
+        {
+            ImGui::PushStyleColor(ImGuiCol_Text, log.colour);
+            ImGui::TextWrapped(log.text.c_str());
+            ImGui::PopStyleColor();
+        }
 
-    for (const auto& log : ctx.debug_log.logs)
-    {
-        ImGui::PushStyleColor(ImGuiCol_Text, log.colour);
-        ImGui::TextWrapped(log.text.c_str());
-        ImGui::PopStyleColor();
-    }
-
-    if (ctx.debug_log.has_new_log && ImGui::GetScrollY() >= ImGui::GetScrollMaxY())
-    {
-        ImGui::SetScrollHereY(1.0f);
-        ctx.debug_log.has_new_log = false;
+        if (ctx.debug_log.has_new_log && ImGui::GetScrollY() >= ImGui::GetScrollMaxY())
+        {
+            ImGui::SetScrollHereY(1.0f);
+            ctx.debug_log.has_new_log = false;
+        }
     }
     ImGui::End();
 }
@@ -289,198 +333,186 @@ static void show_cpu_dism()
         std::string args;
     };
 
-    ImGui::Begin("CPU");
-    if (check_window_collapsed())
+    if (ImGui::Begin("CPU"))
     {
-        return;
-    }
+        ImGui::Text("SP:   %02X   A: %02X   X: %02X   Y: %02X",
+            ctx.nes->cpu.sp,
+            ctx.nes->cpu.ra,
+            ctx.nes->cpu.rx,
+            ctx.nes->cpu.ry);
+        ImGui::Text("PC: %04X   STATUS: %s%s%s%s%s%s%s",
+            ctx.nes->cpu.pc,
+            ctx.nes->cpu.status.n ? "N" : ".",
+            ctx.nes->cpu.status.v ? "V" : ".",
+            ctx.nes->cpu.status.u ? "U" : ".",
+            ctx.nes->cpu.status.b ? "B" : ".",
+            ctx.nes->cpu.status.d ? "D" : ".",
+            ctx.nes->cpu.status.i ? "I" : ".",
+            ctx.nes->cpu.status.z ? "Z" : ".",
+            ctx.nes->cpu.status.c ? "C" : ".");
+        ImGui::Text("");
 
-    ImGui::SetWindowSize({});
-    ImGui::Text("SP:   %02X   A: %02X   X: %02X   Y: %02X",
-        ctx.nes->cpu.sp,
-        ctx.nes->cpu.ra,
-        ctx.nes->cpu.rx,
-        ctx.nes->cpu.ry);
-    ImGui::Text("PC: %04X   STATUS: %s%s%s%s%s%s%s",
-        ctx.nes->cpu.pc,
-        ctx.nes->cpu.status.n ? "N" : ".",
-        ctx.nes->cpu.status.v ? "V" : ".",
-        ctx.nes->cpu.status.u ? "U" : ".",
-        ctx.nes->cpu.status.b ? "B" : ".",
-        ctx.nes->cpu.status.d ? "D" : ".",
-        ctx.nes->cpu.status.i ? "I" : ".",
-        ctx.nes->cpu.status.z ? "Z" : ".",
-        ctx.nes->cpu.status.c ? "C" : ".");
-    ImGui::Text("");
-
-    const int nearby = 16;
-    for (int offset = 0; offset < 3; offset++)
-    {
-        std::vector<disassembly_t> disassembly;
-        int cur_entry = -1;
-        for (int i = -nearby * 3; i < nearby * 3;)
+        const int nearby = 16;
+        for (int offset = 0; offset < 3; offset++)
         {
-            uint16_t addr = ctx.nes->cpu.pc + i;
-            if (addr == ctx.nes->cpu.pc)
+            std::vector<disassembly_t> disassembly;
+            int cur_entry = -1;
+            for (int i = -nearby * 3; i < nearby * 3;)
             {
-                cur_entry = (int)disassembly.size();
+                uint16_t addr = ctx.nes->cpu.pc + i;
+                if (addr == ctx.nes->cpu.pc)
+                {
+                    cur_entry = (int)disassembly.size();
+                }
+
+                if (addr > ctx.nes->cpu.pc && cur_entry == -1)
+                {
+                    break;
+                }
+
+                uint8_t opcode = ctx.nes->cpu_bus.read(addr, false);
+                auto& instruction = nes::cpu_t::instructions[opcode];
+
+                bool is_write_only = instruction.opcode == &nes::cpu_t::STA
+                                || instruction.opcode == &nes::cpu_t::STX
+                                || instruction.opcode == &nes::cpu_t::STY
+                                || instruction.opcode == &nes::cpu_t::SAX
+                                || instruction.opcode == &nes::cpu_t::AXA
+                                || instruction.opcode == &nes::cpu_t::SXA
+                                || instruction.opcode == &nes::cpu_t::SYA
+                                || instruction.opcode == &nes::cpu_t::XAS;
+
+                std::string args;
+                if (instruction.addr_mode == &nes::cpu_t::IMM)
+                {
+                    uint8_t value = ctx.nes->cpu_bus.read(addr + 1, false);
+                    args = fmt::format(" #{:02X}", value);
+                }
+                else if (instruction.addr_mode == &nes::cpu_t::ACC)
+                {
+                    args = fmt::format("       =  #{:02X}", ctx.nes->cpu.ra);
+                }
+                else if (instruction.addr_mode == &nes::cpu_t::ABS)
+                {
+                    uint16_t abs_addr = (ctx.nes->cpu_bus.read(addr + 2, false) << 8)
+                        | ctx.nes->cpu_bus.read(addr + 1, false);
+                    args = fmt::format("{:04X}", abs_addr);
+                    if (instruction.opcode != &nes::cpu_t::JMP
+                        && instruction.opcode != &nes::cpu_t::JSR)
+                    {
+                        uint8_t data = ctx.nes->cpu_bus.read(abs_addr, false);
+                        args += fmt::format("   =  #{:02X}", data);
+                    }
+                }
+                else if (instruction.addr_mode == &nes::cpu_t::ABX)
+                {
+                    uint16_t abs_addr = (ctx.nes->cpu_bus.read(addr + 2, false) << 8)
+                        | ctx.nes->cpu_bus.read(addr + 1, false);
+                    uint8_t data = ctx.nes->cpu_bus.read(abs_addr + ctx.nes->cpu.rx, false);
+                    args = fmt::format("{:04X},X =  #{:02X}", abs_addr, data);
+                }
+                else if (instruction.addr_mode == &nes::cpu_t::ABY)
+                {
+                    uint16_t abs_addr = (ctx.nes->cpu_bus.read(addr + 2, false) << 8)
+                        | ctx.nes->cpu_bus.read(addr + 1, false);
+                    uint8_t data = ctx.nes->cpu_bus.read(abs_addr + ctx.nes->cpu.ry, false);
+                    args = fmt::format("{:04X},Y =  #{:02X}", abs_addr, data);
+                }
+                else if (instruction.addr_mode == &nes::cpu_t::ZRP)
+                {
+                    uint8_t zrp_addr = ctx.nes->cpu_bus.read(addr + 1, false);
+                    uint8_t data = ctx.nes->cpu_bus.read(zrp_addr, false);
+                    args = fmt::format("  {:02X}   =  #{:02X}", zrp_addr, data);
+                }
+                else if (instruction.addr_mode == &nes::cpu_t::ZPX)
+                {
+                    uint8_t zrp_addr = ctx.nes->cpu_bus.read(addr + 1, false);
+                    uint8_t data = ctx.nes->cpu_bus.read((zrp_addr + ctx.nes->cpu.rx) & 0xFF, false);
+                    args = fmt::format("  {:02X},X =  #{:02X}", zrp_addr, data);
+                }
+                else if (instruction.addr_mode == &nes::cpu_t::ZPY)
+                {
+                    uint8_t zrp_addr = ctx.nes->cpu_bus.read(addr + 1, false);
+                    uint8_t data = ctx.nes->cpu_bus.read((zrp_addr + ctx.nes->cpu.ry) & 0xFF, false);
+                    args = fmt::format("  {:02X},Y =  #{:02X}", zrp_addr, data);
+                }
+                else if (instruction.addr_mode == &nes::cpu_t::IDX)
+                {
+                    uint8_t zrp_addr = ctx.nes->cpu_bus.read(addr + 1, false)
+                        + ctx.nes->cpu.rx;
+                    uint16_t abs_addr = (ctx.nes->cpu_bus.read((zrp_addr + 1) & 0xFF, false) << 8)
+                        | ctx.nes->cpu_bus.read(zrp_addr, false);
+                    uint8_t data = ctx.nes->cpu_bus.read(abs_addr, false);
+                    args = fmt::format("({:02X},X) =  #{:02X}", zrp_addr, data);
+                }
+                else if (instruction.addr_mode == &nes::cpu_t::IDY)
+                {
+                    uint8_t zrp_addr = ctx.nes->cpu_bus.read(addr + 1, false);
+                    uint16_t abs_addr = (ctx.nes->cpu_bus.read(zrp_addr, false) << 8)
+                        | ctx.nes->cpu_bus.read((zrp_addr + 1) & 0xFF, false);
+                    uint8_t data = ctx.nes->cpu_bus.read(abs_addr + ctx.nes->cpu.ry, false);
+                    args = fmt::format("({:02X}),Y =  #{:02X}", zrp_addr, data);
+                }
+                else if (instruction.addr_mode == &nes::cpu_t::IND)
+                {
+                    uint16_t abs_addr = (ctx.nes->cpu_bus.read(addr + 2, false) << 8)
+                        | ctx.nes->cpu_bus.read(addr + 1, false);
+                    uint16_t target_addr = ctx.nes->cpu_bus.read(abs_addr, false) |
+                        (ctx.nes->cpu_bus.read(((abs_addr + 1) & 0xFF) | (abs_addr & 0xFF00), false) << 8);
+                    args = fmt::format("({:04X}) = {:04X}", abs_addr, target_addr);
+                }
+                else if (instruction.addr_mode == &nes::cpu_t::REL)
+                {
+                    int8_t offset = (int8_t)ctx.nes->cpu_bus.read(addr + 1, false);
+                    uint16_t target_addr = addr + offset + 2;
+                    args = fmt::format(" {}{:02X}   = {:04X}",
+                        offset >= 0 ? '+' : '-', abs(offset), target_addr);
+                }
+
+                if (is_write_only && args.size() > 6)
+                {
+                    args = args.substr(0, 6);
+                }
+
+                disassembly.push_back(disassembly_t{
+                    .addr = addr,
+                    .opcode = instruction.opcode_name,
+                    .args = std::move(args),
+                });
+
+                i += instruction.byte_count();
             }
 
-            if (addr > ctx.nes->cpu.pc && cur_entry == -1)
+            if (cur_entry != -1)
             {
+                while (cur_entry > nearby)
+                {
+                    cur_entry--;
+                    disassembly.erase(disassembly.begin());
+                }
+                while ((int)disassembly.size() > cur_entry + nearby)
+                {
+                    disassembly.pop_back();
+                }
+                for (size_t i = 0; i < disassembly.size(); i++)
+                {
+                    auto& entry = disassembly[i];
+                    ImVec4 colour = i == cur_entry
+                        ? ImVec4(1.0f, 1.0f, 0.0f, 1.0f)
+                        : ImVec4(0.7f, 0.7f, 0.7f, 1.0f);
+                    ImGui::TextColored(colour, "%04X: %s %s",
+                        entry.addr, entry.opcode.c_str(), entry.args.c_str());
+                }
                 break;
             }
-
-            uint8_t opcode = ctx.nes->cpu_bus.read(addr, false);
-            auto& instruction = nes::cpu_t::instructions[opcode];
-
-            bool is_write_only = instruction.opcode == &nes::cpu_t::STA
-                              || instruction.opcode == &nes::cpu_t::STX
-                              || instruction.opcode == &nes::cpu_t::STY
-                              || instruction.opcode == &nes::cpu_t::SAX
-                              || instruction.opcode == &nes::cpu_t::AXA
-                              || instruction.opcode == &nes::cpu_t::SXA
-                              || instruction.opcode == &nes::cpu_t::SYA
-                              || instruction.opcode == &nes::cpu_t::XAS;
-
-            std::string args;
-            if (instruction.addr_mode == &nes::cpu_t::IMM)
-            {
-                uint8_t value = ctx.nes->cpu_bus.read(addr + 1, false);
-                args = fmt::format(" #{:02X}", value);
-            }
-            else if (instruction.addr_mode == &nes::cpu_t::ACC)
-            {
-                args = fmt::format("       =  #{:02X}", ctx.nes->cpu.ra);
-            }
-            else if (instruction.addr_mode == &nes::cpu_t::ABS)
-            {
-                uint16_t abs_addr = (ctx.nes->cpu_bus.read(addr + 2, false) << 8)
-                    | ctx.nes->cpu_bus.read(addr + 1, false);
-                args = fmt::format("{:04X}", abs_addr);
-                if (instruction.opcode != &nes::cpu_t::JMP
-                    && instruction.opcode != &nes::cpu_t::JSR)
-                {
-                    uint8_t data = ctx.nes->cpu_bus.read(abs_addr, false);
-                    args += fmt::format("   =  #{:02X}", data);
-                }
-            }
-            else if (instruction.addr_mode == &nes::cpu_t::ABX)
-            {
-                uint16_t abs_addr = (ctx.nes->cpu_bus.read(addr + 2, false) << 8)
-                    | ctx.nes->cpu_bus.read(addr + 1, false);
-                uint8_t data = ctx.nes->cpu_bus.read(abs_addr + ctx.nes->cpu.rx, false);
-                args = fmt::format("{:04X},X =  #{:02X}", abs_addr, data);
-            }
-            else if (instruction.addr_mode == &nes::cpu_t::ABY)
-            {
-                uint16_t abs_addr = (ctx.nes->cpu_bus.read(addr + 2, false) << 8)
-                    | ctx.nes->cpu_bus.read(addr + 1, false);
-                uint8_t data = ctx.nes->cpu_bus.read(abs_addr + ctx.nes->cpu.ry, false);
-                args = fmt::format("{:04X},Y =  #{:02X}", abs_addr, data);
-            }
-            else if (instruction.addr_mode == &nes::cpu_t::ZRP)
-            {
-                uint8_t zrp_addr = ctx.nes->cpu_bus.read(addr + 1, false);
-                uint8_t data = ctx.nes->cpu_bus.read(zrp_addr, false);
-                args = fmt::format("  {:02X}   =  #{:02X}", zrp_addr, data);
-            }
-            else if (instruction.addr_mode == &nes::cpu_t::ZPX)
-            {
-                uint8_t zrp_addr = ctx.nes->cpu_bus.read(addr + 1, false);
-                uint8_t data = ctx.nes->cpu_bus.read((zrp_addr + ctx.nes->cpu.rx) & 0xFF, false);
-                args = fmt::format("  {:02X},X =  #{:02X}", zrp_addr, data);
-            }
-            else if (instruction.addr_mode == &nes::cpu_t::ZPY)
-            {
-                uint8_t zrp_addr = ctx.nes->cpu_bus.read(addr + 1, false);
-                uint8_t data = ctx.nes->cpu_bus.read((zrp_addr + ctx.nes->cpu.ry) & 0xFF, false);
-                args = fmt::format("  {:02X},Y =  #{:02X}", zrp_addr, data);
-            }
-            else if (instruction.addr_mode == &nes::cpu_t::IDX)
-            {
-                uint8_t zrp_addr = ctx.nes->cpu_bus.read(addr + 1, false)
-                    + ctx.nes->cpu.rx;
-                uint16_t abs_addr = (ctx.nes->cpu_bus.read((zrp_addr + 1) & 0xFF, false) << 8)
-                    | ctx.nes->cpu_bus.read(zrp_addr, false);
-                uint8_t data = ctx.nes->cpu_bus.read(abs_addr, false);
-                args = fmt::format("({:02X},X) =  #{:02X}", zrp_addr, data);
-            }
-            else if (instruction.addr_mode == &nes::cpu_t::IDY)
-            {
-                uint8_t zrp_addr = ctx.nes->cpu_bus.read(addr + 1, false);
-                uint16_t abs_addr = (ctx.nes->cpu_bus.read(zrp_addr, false) << 8)
-                    | ctx.nes->cpu_bus.read((zrp_addr + 1) & 0xFF, false);
-                uint8_t data = ctx.nes->cpu_bus.read(abs_addr + ctx.nes->cpu.ry, false);
-                args = fmt::format("({:02X}),Y =  #{:02X}", zrp_addr, data);
-            }
-            else if (instruction.addr_mode == &nes::cpu_t::IND)
-            {
-                uint16_t abs_addr = (ctx.nes->cpu_bus.read(addr + 2, false) << 8)
-                    | ctx.nes->cpu_bus.read(addr + 1, false);
-                uint16_t target_addr = ctx.nes->cpu_bus.read(abs_addr, false) |
-                    (ctx.nes->cpu_bus.read(((abs_addr + 1) & 0xFF) | (abs_addr & 0xFF00), false) << 8);
-                args = fmt::format("({:04X})   = {:04X}", abs_addr, target_addr);
-            }
-            else if (instruction.addr_mode == &nes::cpu_t::REL)
-            {
-                int8_t offset = (int8_t)ctx.nes->cpu_bus.read(addr + 1, false);
-                uint16_t target_addr = addr + offset + 2;
-                args = fmt::format(" {}{:02X}   = {:04X}",
-                    offset >= 0 ? '+' : '-', abs(offset), target_addr);
-            }
-
-            if (is_write_only && args.size() > 6)
-            {
-                args = args.substr(0, 6);
-            }
-
-            disassembly.push_back(disassembly_t{
-                .addr = addr,
-                .opcode = instruction.opcode_name,
-                .args = std::move(args),
-            });
-
-            i += instruction.byte_count();
-        }
-
-        if (cur_entry != -1)
-        {
-            while (cur_entry > nearby)
-            {
-                cur_entry--;
-                disassembly.erase(disassembly.begin());
-            }
-            while ((int)disassembly.size() > cur_entry + nearby)
-            {
-                disassembly.pop_back();
-            }
-            for (size_t i = 0; i < disassembly.size(); i++)
-            {
-                auto& entry = disassembly[i];
-                ImVec4 colour = i == cur_entry
-                    ? ImVec4(1.0f, 1.0f, 0.0f, 1.0f)
-                    : ImVec4(0.7f, 0.7f, 0.7f, 1.0f);
-                ImGui::TextColored(colour, "%04X: %s %s",
-                    entry.addr, entry.opcode.c_str(), entry.args.c_str());
-            }
-            break;
         }
     }
-
     ImGui::End();
 }
 
-static void show_ram()
+static void show_memory(nes::bus_t& bus, size_t start_addr, size_t end_addr)
 {
-    ImGui::Begin("RAM");
-    if (check_window_collapsed())
-    {
-        return;
-    }
-
-    ImGui::SetWindowSize({ 0, 640 });
-    for (size_t i = 0; i < 0x800; i += 0x100)
+    for (size_t i = start_addr; i < end_addr; i += 0x100)
     {
         if (i)
         {
@@ -491,223 +523,325 @@ static void show_ram()
             ImGui::Text("%04X: %02X %02X %02X %02X  %02X %02X %02X %02X  "
                 "%02X %02X %02X %02X  %02X %02X %02X %02X",
                 i + j,
-                ctx.nes->cpu_bus.read((uint16_t)(i + j +  0), false),
-                ctx.nes->cpu_bus.read((uint16_t)(i + j +  1), false),
-                ctx.nes->cpu_bus.read((uint16_t)(i + j +  2), false),
-                ctx.nes->cpu_bus.read((uint16_t)(i + j +  3), false),
-                ctx.nes->cpu_bus.read((uint16_t)(i + j +  4), false),
-                ctx.nes->cpu_bus.read((uint16_t)(i + j +  5), false),
-                ctx.nes->cpu_bus.read((uint16_t)(i + j +  6), false),
-                ctx.nes->cpu_bus.read((uint16_t)(i + j +  7), false),
-                ctx.nes->cpu_bus.read((uint16_t)(i + j +  8), false),
-                ctx.nes->cpu_bus.read((uint16_t)(i + j +  9), false),
-                ctx.nes->cpu_bus.read((uint16_t)(i + j + 10), false),
-                ctx.nes->cpu_bus.read((uint16_t)(i + j + 11), false),
-                ctx.nes->cpu_bus.read((uint16_t)(i + j + 12), false),
-                ctx.nes->cpu_bus.read((uint16_t)(i + j + 13), false),
-                ctx.nes->cpu_bus.read((uint16_t)(i + j + 14), false),
-                ctx.nes->cpu_bus.read((uint16_t)(i + j + 15), false));
+                bus.read((uint16_t)(i + j +  0), false),
+                bus.read((uint16_t)(i + j +  1), false),
+                bus.read((uint16_t)(i + j +  2), false),
+                bus.read((uint16_t)(i + j +  3), false),
+                bus.read((uint16_t)(i + j +  4), false),
+                bus.read((uint16_t)(i + j +  5), false),
+                bus.read((uint16_t)(i + j +  6), false),
+                bus.read((uint16_t)(i + j +  7), false),
+                bus.read((uint16_t)(i + j +  8), false),
+                bus.read((uint16_t)(i + j +  9), false),
+                bus.read((uint16_t)(i + j + 10), false),
+                bus.read((uint16_t)(i + j + 11), false),
+                bus.read((uint16_t)(i + j + 12), false),
+                bus.read((uint16_t)(i + j + 13), false),
+                bus.read((uint16_t)(i + j + 14), false),
+                bus.read((uint16_t)(i + j + 15), false));
         }
+    }
+}
+
+static void show_ram()
+{
+    if (ImGui::Begin("RAM"))
+    {
+        show_memory(ctx.nes->cpu_bus, 0x0000, 0x0800);
+    }
+    ImGui::End();
+}
+
+static void show_cpu_memory_map()
+{
+    if (ImGui::Begin("CPU MAP"))
+    {
+        show_memory(ctx.nes->cpu_bus, 0x0000, 0x10000);
+    }
+    ImGui::End();
+}
+
+static void show_ppu_memory_map()
+{
+    if (ImGui::Begin("PPU MAP"))
+    {
+        show_memory(ctx.nes->ppu_bus, 0x0000, 0x4000);
     }
     ImGui::End();
 }
 
 static void show_palette()
 {
-    ImGui::Begin("PALETTE RAM");
-    if (check_window_collapsed())
+    if (ImGui::Begin("PALETTE"))
     {
-        return;
-    }
+        for (uint8_t is_fg = 0; is_fg < 2; is_fg++)
+        for (uint8_t attribute = 0; attribute < 4; attribute++)
+        for (uint8_t pattern = 0; pattern < 4; pattern++)
+        {
+            ctx.debug_palette.images[is_fg * 4 + attribute].data[pattern] = ctx.nes->ppu_bus.read(
+                nes::ppu_t::get_palette_addr(
+                    is_fg,
+                    attribute,
+                    pattern),
+                false);
+        }
 
-    size_t i = 0;
-    for (uint8_t is_fg = 0; is_fg < 2; is_fg++)
-    for (uint8_t attribute = 0; attribute < 4; attribute++)
-    for (uint8_t pattern = 0; pattern < 4; pattern++)
-    {
-        ctx.debug_palette.image.data[i++] = ctx.nes->ppu_bus.read(
-            nes::ppu_t::get_palette_addr(
-                is_fg,
-                attribute,
-                pattern),
-            false);
-    }
+        for (auto& image: ctx.debug_palette.images)
+        {
+            write_texture(image);
+        }
+        constexpr ImVec2 image_size = { 16 * 4, 16 * 1 };
 
-    WriteTexture(ctx.debug_palette.image);
-    ImGui::SetWindowSize({});
-    ImGui::Image(ctx.debug_palette.image.texture, { 16 * 16, 16 * 2 });
+        ImGui::Text("BG 0");
+        ImGui::SameLine();
+        ImGui::Image(ctx.debug_palette.images[0].texture, image_size);
+        ImGui::SameLine();
+        ImGui::Text("FG 0");
+        ImGui::SameLine();
+        ImGui::Image(ctx.debug_palette.images[4].texture, image_size);
+
+        ImGui::Text("BG 1");
+        ImGui::SameLine();
+        ImGui::Image(ctx.debug_palette.images[1].texture, image_size);
+        ImGui::SameLine();
+        ImGui::Text("FG 1");
+        ImGui::SameLine();
+        ImGui::Image(ctx.debug_palette.images[5].texture, image_size);
+
+        ImGui::Text("BG 2");
+        ImGui::SameLine();
+        ImGui::Image(ctx.debug_palette.images[2].texture, image_size);
+        ImGui::SameLine();
+        ImGui::Text("FG 2");
+        ImGui::SameLine();
+        ImGui::Image(ctx.debug_palette.images[6].texture, image_size);
+
+        ImGui::Text("BG 3");
+        ImGui::SameLine();
+        ImGui::Image(ctx.debug_palette.images[3].texture, image_size);
+        ImGui::SameLine();
+        ImGui::Text("FG 3");
+        ImGui::SameLine();
+        ImGui::Image(ctx.debug_palette.images[7].texture, image_size);
+    }
     ImGui::End();
 }
 
 static void show_pattern_table()
 {
-    ImGui::Begin("PATTERN TABLE");
-    if (check_window_collapsed())
+    if (ImGui::Begin("PATTERN TABLE"))
     {
-        return;
-    }
-
-    size_t i = 0;
-    for (uint8_t coarse_y = 0; coarse_y < 16; coarse_y++)
-    for (uint8_t fine_y = 0; fine_y < 8; fine_y++)
-    for (uint8_t lr_table = 0; lr_table < 2; lr_table++)
-    for (uint8_t coarse_x = 0; coarse_x < 16; coarse_x++)
-    {
-        uint8_t pattern_lo = ctx.nes->ppu_bus.read(
-            nes::ppu_t::get_pattern_lo_addr(
-                lr_table,
-                coarse_y * 16 + coarse_x,
-                fine_y),
-            false);
-        uint8_t pattern_hi = ctx.nes->ppu_bus.read(
-            nes::ppu_t::get_pattern_hi_addr(
-                lr_table,
-                coarse_y * 16 + coarse_x,
-                fine_y),
-            false);
-        pattern_lo = nes::ppu_t::reverse_bits(pattern_lo);
-        pattern_hi = nes::ppu_t::reverse_bits(pattern_hi);
-        for (uint8_t fine_x = 0; fine_x < 8; fine_x++)
+        size_t i = 0;
+        for (uint8_t lr_table = 0; lr_table < 2; lr_table++)
+        for (uint8_t coarse_y = 0; coarse_y < 16; coarse_y++)
+        for (uint8_t fine_y = 0; fine_y < 8; fine_y++)
+        for (uint8_t coarse_x = 0; coarse_x < 16; coarse_x++)
         {
-            uint8_t pattern = ((pattern_lo >> fine_x) & 1)
-                | (((pattern_hi >> fine_x) & 1) << 1);
-            static const uint8_t colours[4] = { 0x0F, 0x00, 0x10, 0x20 };
-            ctx.debug_pattern_table.image.data[i++] = colours[pattern];
+            uint8_t pattern_lo = ctx.nes->ppu_bus.read(
+                nes::ppu_t::get_pattern_lo_addr(
+                    lr_table,
+                    coarse_y * 16 + coarse_x,
+                    fine_y),
+                false);
+            uint8_t pattern_hi = ctx.nes->ppu_bus.read(
+                nes::ppu_t::get_pattern_hi_addr(
+                    lr_table,
+                    coarse_y * 16 + coarse_x,
+                    fine_y),
+                false);
+            pattern_lo = nes::ppu_t::reverse_bits(pattern_lo);
+            pattern_hi = nes::ppu_t::reverse_bits(pattern_hi);
+            for (uint8_t fine_x = 0; fine_x < 8; fine_x++)
+            {
+                uint8_t pattern = ((pattern_lo >> fine_x) & 1)
+                    | (((pattern_hi >> fine_x) & 1) << 1);
+                static const uint8_t colours[4] = { 0x0F, 0x00, 0x10, 0x20 };
+                ctx.debug_pattern_table.image.data[i++] = colours[pattern];
+            }
         }
-    }
 
-    WriteTexture(ctx.debug_pattern_table.image);
-    ImGui::SetWindowSize({});
-    ImGui::Image(ctx.debug_pattern_table.image.texture, { 512, 256 });
+        write_texture(ctx.debug_pattern_table.image);
+        draw_centred_image(ctx.debug_pattern_table.image.texture);
+    }
     ImGui::End();
 }
 
 static void show_nametable()
 {
-    ImGui::Begin("NAMETABLE");
-    if (check_window_collapsed())
+    if (ImGui::Begin("NAMETABLE"))
     {
-        return;
-    }
-
-    size_t i = 0;
-    for (uint8_t nametable_y = 0; nametable_y < 2; nametable_y++)
-    {
-        for (uint8_t coarse_y = 0; coarse_y < 30; coarse_y++)
-        for (uint8_t fine_y = 0; fine_y < 8; fine_y++)
-        for (uint8_t nametable_x = 0; nametable_x < 2; nametable_x++)
+        size_t i = 0;
+        for (uint8_t nametable_y = 0; nametable_y < 2; nametable_y++)
         {
-            uint8_t nametable = nametable_y * 2 + nametable_x;
-            for (uint8_t coarse_x = 0; coarse_x < 32; coarse_x++)
+            for (uint8_t coarse_y = 0; coarse_y < 30; coarse_y++)
+            for (uint8_t fine_y = 0; fine_y < 8; fine_y++)
+            for (uint8_t nametable_x = 0; nametable_x < 2; nametable_x++)
             {
-                uint8_t attribute = ctx.nes->ppu_bus.read(
-                    nes::ppu_t::get_attribute_addr(
-                        nametable,
-                        coarse_x,
-                        coarse_y),
-                    false);
-                attribute = nes::ppu_t::get_attribute(
-                    attribute,
-                    coarse_x,
-                    coarse_y);
-
-                uint8_t tile = ctx.nes->ppu_bus.read(
-                    nes::ppu_t::get_tile_addr(
-                        nametable,
-                        coarse_x,
-                        coarse_y),
-                    false);
-
-                uint8_t pattern_lo = ctx.nes->ppu_bus.read(
-                    nes::ppu_t::get_pattern_lo_addr(
-                        ctx.nes->ppu.ppuctrl.bg_pattern_table_addr,
-                        tile,
-                        fine_y),
-                    false);
-                uint8_t pattern_hi = ctx.nes->ppu_bus.read(
-                    nes::ppu_t::get_pattern_hi_addr(
-                        ctx.nes->ppu.ppuctrl.bg_pattern_table_addr,
-                        tile,
-                        fine_y),
-                    false);
-                pattern_lo = nes::ppu_t::reverse_bits(pattern_lo);
-                pattern_hi = nes::ppu_t::reverse_bits(pattern_hi);
-
-                for (uint8_t fine_x = 0; fine_x < 8; fine_x++)
+                uint8_t nametable = nametable_y * 2 + nametable_x;
+                for (uint8_t coarse_x = 0; coarse_x < 32; coarse_x++)
                 {
-                    uint8_t pattern = ((pattern_lo >> fine_x) & 1)
-                        | (((pattern_hi >> fine_x) & 1) << 1);
-
-                    ctx.debug_nametable.image.data[i++] = ctx.nes->ppu_bus.read(
-                        nes::ppu_t::get_palette_addr(
-                            0,
-                            attribute,
-                            pattern),
+                    uint8_t attribute = ctx.nes->ppu_bus.read(
+                        nes::ppu_t::get_attribute_addr(
+                            nametable,
+                            coarse_x,
+                            coarse_y),
                         false);
+                    attribute = nes::ppu_t::get_attribute(
+                        attribute,
+                        coarse_x,
+                        coarse_y);
+
+                    uint8_t tile = ctx.nes->ppu_bus.read(
+                        nes::ppu_t::get_tile_addr(
+                            nametable,
+                            coarse_x,
+                            coarse_y),
+                        false);
+
+                    uint8_t pattern_lo = ctx.nes->ppu_bus.read(
+                        nes::ppu_t::get_pattern_lo_addr(
+                            ctx.nes->ppu.ppuctrl.bg_pattern_table_addr,
+                            tile,
+                            fine_y),
+                        false);
+                    uint8_t pattern_hi = ctx.nes->ppu_bus.read(
+                        nes::ppu_t::get_pattern_hi_addr(
+                            ctx.nes->ppu.ppuctrl.bg_pattern_table_addr,
+                            tile,
+                            fine_y),
+                        false);
+                    pattern_lo = nes::ppu_t::reverse_bits(pattern_lo);
+                    pattern_hi = nes::ppu_t::reverse_bits(pattern_hi);
+
+                    for (uint8_t fine_x = 0; fine_x < 8; fine_x++)
+                    {
+                        uint8_t pattern = ((pattern_lo >> fine_x) & 1)
+                            | (((pattern_hi >> fine_x) & 1) << 1);
+
+                        ctx.debug_nametable.image.data[i++] = ctx.nes->ppu_bus.read(
+                            nes::ppu_t::get_palette_addr(
+                                0,
+                                attribute,
+                                pattern),
+                            false);
+                    }
                 }
             }
-        }
 
-        for (uint8_t block_y = 0; block_y < 16; block_y++)
-        for (uint8_t nametable_x = 0; nametable_x < 2; nametable_x++)
-        {
-            uint8_t nametable = nametable_y * 2 + nametable_x;
-            for (uint8_t block_x = 0; block_x < 16; block_x++)
+            for (uint8_t block_y = 0; block_y < 16; block_y++)
+            for (uint8_t nametable_x = 0; nametable_x < 2; nametable_x++)
             {
-                uint8_t attribute = ctx.nes->ppu_bus.read(
-                    nes::ppu_t::get_attribute_addr(
-                        nametable,
+                uint8_t nametable = nametable_y * 2 + nametable_x;
+                for (uint8_t block_x = 0; block_x < 16; block_x++)
+                {
+                    uint8_t attribute = ctx.nes->ppu_bus.read(
+                        nes::ppu_t::get_attribute_addr(
+                            nametable,
+                            block_x * 2,
+                            block_y * 2),
+                        false);
+                    attribute = nes::ppu_t::get_attribute(
+                        attribute,
                         block_x * 2,
-                        block_y * 2),
-                    false);
-                attribute = nes::ppu_t::get_attribute(
-                    attribute,
-                    block_x * 2,
-                    block_y * 2);
-                for (uint8_t pattern = 0; pattern < 4; pattern++)
-                for (uint8_t repeat_x = 0; repeat_x < 4; repeat_x++)
-                {
-                    ctx.debug_nametable.image.data[i++] = ctx.nes->ppu_bus.read(
-                        nes::ppu_t::get_palette_addr(
-                            0,
-                            attribute,
-                            pattern),
-                        false);
+                        block_y * 2);
+                    for (uint8_t pattern = 0; pattern < 4; pattern++)
+                    for (uint8_t repeat_x = 0; repeat_x < 4; repeat_x++)
+                    {
+                        ctx.debug_nametable.image.data[i++] = ctx.nes->ppu_bus.read(
+                            nes::ppu_t::get_palette_addr(
+                                0,
+                                attribute,
+                                pattern),
+                            false);
+                    }
                 }
             }
         }
-    }
 
-    WriteTexture(ctx.debug_nametable.image);
-    ImGui::SetWindowSize({});
-    ImGui::Image(ctx.debug_nametable.image.texture, { 512, 512 });
+        write_texture(ctx.debug_nametable.image);
+        draw_centred_image(ctx.debug_nametable.image.texture);
+    }
     ImGui::End();
 }
 
 static void show_sprites()
 {
-    ImGui::Begin("OAM");
-    if (check_window_collapsed())
+    if (ImGui::Begin("SPRITES"))
     {
-        return;
-    }
+        uint8_t sprite_size = ctx.nes->ppu.ppuctrl.sprite_size == 0 ? 8 : 16;
+        uint8_t tile_mask = sprite_size == 16 ? 0xFE : 0xFF;
 
-    ImGui::SetWindowSize({ 0, 640 });
-    if (ctx.nes->ppu.ppuctrl.sprite_size == 0)
-    {
-        ImGui::Text("    RAW             I  X  Y  PL PR FH FV");
+        ImGui::Text("    RAW             I  X  Y  A P H V");
         for (size_t i = 0; i < 64; i += 8)
         {
             ImGui::Text("");
             for (size_t j = 0; j < 8; j++)
             {
                 auto& oam = ctx.nes->ppu.oam[i + j];
+                auto& image = ctx.debug_sprites.images[i + j];
+                uint8_t pattern_table = sprite_size == 16
+                    ? oam.tile_index & 1
+                    : ctx.nes->ppu.ppuctrl.sprite8x8_table_addr;
+
+                for (uint8_t y = 0; y < sprite_size; y++)
+                {
+                    uint8_t y_pos = oam.flip_vertically ? (sprite_size - y - 1) : y;
+                    uint8_t pattern_lo;
+                    uint8_t pattern_hi;
+                    if (y_pos < 8)
+                    {
+                        pattern_lo = ctx.nes->ppu_bus.read(
+                            nes::ppu_t::get_pattern_lo_addr(
+                                pattern_table,
+                                oam.tile_index & tile_mask,
+                                y_pos),
+                            false);
+                        pattern_hi = ctx.nes->ppu_bus.read(
+                            nes::ppu_t::get_pattern_hi_addr(
+                                pattern_table,
+                                oam.tile_index & tile_mask,
+                                y_pos),
+                            false);
+                    }
+                    else
+                    {
+                        pattern_lo = ctx.nes->ppu_bus.read(
+                            nes::ppu_t::get_pattern_lo_addr(
+                                pattern_table,
+                                (oam.tile_index & 0xFE) + 1,
+                                y_pos - 8),
+                            false);
+                        pattern_hi = ctx.nes->ppu_bus.read(
+                            nes::ppu_t::get_pattern_hi_addr(
+                                pattern_table,
+                                (oam.tile_index & 0xFE) + 1,
+                                y_pos - 8),
+                            false);
+                    }
+                    if (!oam.flip_horizontally)
+                    {
+                        pattern_lo = nes::ppu_t::reverse_bits(pattern_lo);
+                        pattern_hi = nes::ppu_t::reverse_bits(pattern_hi);
+                    }
+                    for (size_t x = 0; x < 8; x++, pattern_lo >>= 1, pattern_hi >>= 1)
+                    {
+                        uint8_t pattern = (pattern_lo & 1) | ((pattern_hi & 1) << 1);
+                        image.data[y * 8 + x] = ctx.nes->ppu_bus.read(
+                            nes::ppu_t::get_palette_addr(
+                                1,
+                                oam.palette,
+                                pattern),
+                            false);
+                    }
+                }
+                write_texture(image);
+
                 ImVec4 colour = oam.y < 0xEF
                     ? ImVec4(1.0f, 1.0f, 1.0f, 1.0f)
                     : ImVec4(0.7f, 0.7f, 0.7f, 1.0f);
                 ImGui::TextColored(
                     colour,
-                    "%02X: %02X %02X %02X %02X     %02X %02X %02X %d  %c  %c  %c",
+                    "%02X: %02X %02X %02X %02X     %02X %02X %02X %d %c %c %c",
                     i + j,
                     ctx.nes->ppu.oam_bytes[(i + j) * 4],
                     ctx.nes->ppu.oam_bytes[(i + j) * 4 + 1],
@@ -716,129 +850,199 @@ static void show_sprites()
                     oam.tile_index,
                     oam.x,
                     oam.y,
-                    oam.palette + 4,
-                    oam.priority ? 'X' : '.',
-                    oam.flip_horizontally ? 'X' : '.',
-                    oam.flip_vertically ? 'X' : '.');
+                    oam.palette,
+                    oam.priority ? 'P' : '.',
+                    oam.flip_horizontally ? 'H' : '.',
+                    oam.flip_vertically ? 'V' : '.');
+                ImGui::SameLine();
+                ImGui::Image(
+                    image.texture,
+                    { 16.0f, sprite_size * 2.0f },
+                    { 0.0f, 0.0f },
+                    { 1.0f, sprite_size == 8 ? 0.5f : 1.0f });
             }
         }
-    }
-    else
-    {
-        ImGui::Text("8x16 sprites view not supported.");
     }
     ImGui::End();
 }
 
-static void show_ppu()
+static void show_control()
 {
-    ImGui::Begin("PPU");
-    if (check_window_collapsed())
+    if (ImGui::Begin("Control"))
     {
-        return;
+        ImGui::Text("FPS: %.1f", ImGui::GetIO().Framerate);
+        draw_separator();
+
+        if (ctx.nes->cart)
+        {
+            ImGui::Text("Cartridge: %s", ctx.debug_control.cart_name.c_str());
+            ImGui::Text("  PRG:    %d KB", ctx.nes->cart->header.prg_chunks * 16);
+            ImGui::Text("  CHR:    %d KB", ctx.nes->cart->header.chr_chunks * 8);
+            ImGui::Text("  Mapper: %d (%s)",
+                ctx.nes->cart->header.mapper_number_lower
+                    | (ctx.nes->cart->header.mapper_number_upper << 4),
+                ctx.nes->cart->mapper->get_name());
+        }
+        else
+        {
+            ImGui::Text("Cartridge (not loaded)");
+            ImGui::Text("  PRG:    -");
+            ImGui::Text("  CHR:    -");
+            ImGui::Text("  Mapper: -");
+        }
+        draw_separator();
+
+        ImGui::SliderInt("Speed", &ctx.debug_control.emulation_speed, 1, 4, "%dx", ImGuiSliderFlags_AlwaysClamp);
+        ImGui::Checkbox("Pause", &ctx.debug_control.pause);
+        ImGui::Checkbox("Show background", &ctx.nes->ppu.debug.enable_bg);
+        ImGui::Checkbox("Show sprites", &ctx.nes->ppu.debug.enable_fg);
+        ImGui::Checkbox("Show grid", &ctx.debug_control.show_grid);
+        ImGui::Checkbox("Show sprite 0 hit", &ctx.debug_control.show_sprite_zero_hit);
+        ImGui::Checkbox("Enable greyscale", &ctx.nes->ppu.debug.enable_greyscale);
     }
-
-    ImGui::SetWindowSize({});
-
-    ImGui::Checkbox("Show grid", &ctx.debug_ppu.show_grid);
-    ImGui::Checkbox("Show sprite 0 hit", &ctx.debug_ppu.show_sprite_zero_hit);
-
     ImGui::End();
 }
 
 static void show_apu()
 {
-    ImGui::Begin("APU");
-    if (check_window_collapsed())
+    if (ImGui::Begin("APU"))
     {
-        return;
-    }
+        float window_width = ImGui::GetContentRegionAvail().x;
 
-    if (ImGui::IsWindowHovered())
-    {
-        ImGuiIO& io = ImGui::GetIO();
-        if (io.MouseWheel != 0.0f)
+        if (ImGui::IsWindowHovered())
         {
-            float mouse_x = io.MousePos.x - ImGui::GetWindowPos().x - ImGui::GetStyle().WindowPadding.x;
-            float mouse_ratio = mouse_x / APU_DEBUG_WIDTH;
-            float viewport_size = ctx.debug_apu.viewport_max - ctx.debug_apu.viewport_min;
-            float zoom_amount = viewport_size * 0.1f * (io.MouseWheel > 0.0f ? 1.0f : -1.0f);
-            ctx.debug_apu.viewport_min += zoom_amount * mouse_ratio;
-            ctx.debug_apu.viewport_max -= zoom_amount * (1.0f - mouse_ratio);
-            ctx.debug_apu.viewport_min = std::clamp(ctx.debug_apu.viewport_min, -2.0f, -0.001f);    
-            ctx.debug_apu.viewport_max = std::clamp(ctx.debug_apu.viewport_max, -1.999f, 0.0f);
+            ImGuiIO& io = ImGui::GetIO();
+            if (io.MouseWheel != 0.0f)
+            {
+                float mouse_x = io.MousePos.x - ImGui::GetWindowPos().x - ImGui::GetStyle().WindowPadding.x;
+                float mouse_ratio = mouse_x / window_width;
+                float viewport_size = ctx.debug_apu.viewport_max - ctx.debug_apu.viewport_min;
+                float zoom_amount = viewport_size * 0.1f * (io.MouseWheel > 0.0f ? 1.0f : -1.0f);
+                ctx.debug_apu.viewport_min += zoom_amount * mouse_ratio;
+                ctx.debug_apu.viewport_max -= zoom_amount * (1.0f - mouse_ratio);
+                ctx.debug_apu.viewport_min = std::clamp(ctx.debug_apu.viewport_min, -2.0f, -0.001f);    
+                ctx.debug_apu.viewport_max = std::clamp(ctx.debug_apu.viewport_max, -1.999f, 0.0f);
+            }
+        }
+
+        constexpr uint8_t BG = 0x2D;
+        constexpr uint8_t WHITE = 0x30;
+
+        memset(ctx.debug_apu.pulse1_image.data, BG, sizeof(ctx.debug_apu.pulse1_image.data));
+        memset(ctx.debug_apu.pulse2_image.data, BG, sizeof(ctx.debug_apu.pulse2_image.data));
+        memset(ctx.debug_apu.triangle_image.data, BG, sizeof(ctx.debug_apu.triangle_image.data));
+        memset(ctx.debug_apu.noise_image.data, BG, sizeof(ctx.debug_apu.noise_image.data));
+        memset(ctx.debug_apu.dmc_image.data, BG, sizeof(ctx.debug_apu.dmc_image.data));
+        memset(ctx.debug_apu.mixer_image.data, BG, sizeof(ctx.debug_apu.mixer_image.data));
+
+        for (size_t i = 0; i < APU_DEBUG_WIDTH; i++)
+        {
+            float viewport_pos = (((float)i / (float)APU_DEBUG_WIDTH)
+                * (ctx.debug_apu.viewport_max - ctx.debug_apu.viewport_min))
+                + ctx.debug_apu.viewport_min;
+            size_t index = MIXER_HISTORY_LENGTH + (size_t)std::floor(AUDIO_SAMPLE_RATE * viewport_pos);
+            if (index >= MIXER_HISTORY_LENGTH)
+            {
+                continue;
+            }
+
+            uint8_t sample = ctx.debug_apu.pulse1_history[index];
+            ctx.debug_apu.pulse1_image.data[APU_DEBUG_WIDTH * (ctx.debug_apu.pulse1_image.height - sample - 1) + i] = WHITE;
+
+            sample = ctx.debug_apu.pulse2_history[index];
+            ctx.debug_apu.pulse2_image.data[APU_DEBUG_WIDTH * (ctx.debug_apu.pulse2_image.height - sample - 1) + i] = WHITE;
+
+            sample = ctx.debug_apu.triangle_history[index];
+            ctx.debug_apu.triangle_image.data[APU_DEBUG_WIDTH * (ctx.debug_apu.triangle_image.height - sample - 1) + i] = WHITE;
+
+            sample = ctx.debug_apu.noise_history[index];
+            ctx.debug_apu.noise_image.data[APU_DEBUG_WIDTH * (ctx.debug_apu.noise_image.height - sample - 1) + i] = WHITE;
+
+            sample = ctx.debug_apu.dmc_history[index];
+            ctx.debug_apu.dmc_image.data[APU_DEBUG_WIDTH * (ctx.debug_apu.dmc_image.height - sample - 1) + i] = WHITE;
+
+            sample = (uint8_t)(ctx.debug_apu.mixer_history[index] * 127.0f);
+            ctx.debug_apu.mixer_image.data[APU_DEBUG_WIDTH * (ctx.debug_apu.mixer_image.height - sample - 1) + i] = WHITE;
+        }
+
+        write_texture(ctx.debug_apu.pulse1_image);
+        write_texture(ctx.debug_apu.pulse2_image);
+        write_texture(ctx.debug_apu.triangle_image);
+        write_texture(ctx.debug_apu.noise_image);
+        write_texture(ctx.debug_apu.dmc_image);
+        write_texture(ctx.debug_apu.mixer_image);
+
+        ImGui::Checkbox("Pulse 1", &ctx.nes->apu.pulse1.debug.enabled);
+        ImGui::Image(ctx.debug_apu.pulse1_image.texture, { window_width, ctx.debug_apu.pulse1_image.height });
+
+        ImGui::Checkbox("Pulse 2", &ctx.nes->apu.pulse2.debug.enabled);
+        ImGui::Image(ctx.debug_apu.pulse2_image.texture, { window_width, ctx.debug_apu.pulse2_image.height });
+
+        ImGui::Checkbox("Triangle", &ctx.nes->apu.triangle.debug.enabled);
+        ImGui::SameLine();
+        ImGui::Checkbox("Zero when stopped", &ctx.nes->apu.triangle.debug.output_zero_when_stopped);
+        ImGui::Image(ctx.debug_apu.triangle_image.texture, { window_width, ctx.debug_apu.triangle_image.height });
+
+        ImGui::Checkbox("Noise", &ctx.nes->apu.noise.debug.enabled);
+        ImGui::Image(ctx.debug_apu.noise_image.texture, { window_width, ctx.debug_apu.noise_image.height });
+
+        ImGui::Checkbox("DMC", &ctx.nes->apu.dmc.debug.enabled);
+        ImGui::Image(ctx.debug_apu.dmc_image.texture, { window_width, ctx.debug_apu.dmc_image.height });
+
+        ImGui::Checkbox("Mix", &ctx.nes->apu.debug.enabled);
+        ImGui::Image(ctx.debug_apu.mixer_image.texture, { window_width, ctx.debug_apu.mixer_image.height });
+    }
+    ImGui::End();
+}
+
+static void post_process_screen(uint8_t* pixels, int width, int height, int pitch)
+{
+    if (ctx.debug_control.show_grid)
+    {
+        for (int y = 0; y < height; y++)
+        {
+            colour_t* row = (colour_t*)(pixels + y * pitch);
+            for (int x = 0; x < width; x++)
+            {
+                if ((x + y) % 2 == 0)
+                {
+                    row[x].r += 16;
+                    row[x].g += 16;
+                    row[x].b += 16;
+                }
+                if (x % 8 == 0 || y % 8 == 0)
+                {
+                    row[x].r += 16;
+                    row[x].g += 16;
+                    row[x].b += 16;
+                }
+            }
         }
     }
 
-    constexpr uint8_t BG = 0x2D;
-    constexpr uint8_t WHITE = 0x30;
-
-    memset(ctx.debug_apu.pulse1_image.data, BG, sizeof(ctx.debug_apu.pulse1_image.data));
-    memset(ctx.debug_apu.pulse2_image.data, BG, sizeof(ctx.debug_apu.pulse2_image.data));
-    memset(ctx.debug_apu.triangle_image.data, BG, sizeof(ctx.debug_apu.triangle_image.data));
-    memset(ctx.debug_apu.noise_image.data, BG, sizeof(ctx.debug_apu.noise_image.data));
-    memset(ctx.debug_apu.dmc_image.data, BG, sizeof(ctx.debug_apu.dmc_image.data));
-    memset(ctx.debug_apu.mixer_image.data, BG, sizeof(ctx.debug_apu.mixer_image.data));
-
-    for (size_t i = 0; i < APU_DEBUG_WIDTH; i++)
+    if (ctx.debug_control.show_sprite_zero_hit)
     {
-        float viewport_pos = (((float)i / (float)APU_DEBUG_WIDTH)
-            * (ctx.debug_apu.viewport_max - ctx.debug_apu.viewport_min))
-            + ctx.debug_apu.viewport_min;
-        size_t index = MIXER_HISTORY_LENGTH + (size_t)std::floor(AUDIO_SAMPLE_RATE * viewport_pos);
-        if (index >= MIXER_HISTORY_LENGTH)
+        auto& x = ctx.nes->ppu.debug.sprite_zero_hit_dot;
+        auto& y = ctx.nes->ppu.debug.sprite_zero_hit_scanline;
+        if (x && y && (SDL_GetTicks() / 100) % 2 == 0)
         {
-            continue;
+            ((colour_t*)(pixels + *y * pitch))[*x] = { 255, 0, 0, 255 };
+            x = std::nullopt;
+            y = std::nullopt;
         }
-
-        uint8_t sample = ctx.debug_apu.pulse1_history[index];
-        ctx.debug_apu.pulse1_image.data[APU_DEBUG_WIDTH * (ctx.debug_apu.pulse1_image.height - sample - 1) + i] = WHITE;
-
-        sample = ctx.debug_apu.pulse2_history[index];
-        ctx.debug_apu.pulse2_image.data[APU_DEBUG_WIDTH * (ctx.debug_apu.pulse2_image.height - sample - 1) + i] = WHITE;
-
-        sample = ctx.debug_apu.triangle_history[index];
-        ctx.debug_apu.triangle_image.data[APU_DEBUG_WIDTH * (ctx.debug_apu.triangle_image.height - sample - 1) + i] = WHITE;
-
-        sample = ctx.debug_apu.noise_history[index];
-        ctx.debug_apu.noise_image.data[APU_DEBUG_WIDTH * (ctx.debug_apu.noise_image.height - sample - 1) + i] = WHITE;
-
-        sample = ctx.debug_apu.dmc_history[index];
-        ctx.debug_apu.dmc_image.data[APU_DEBUG_WIDTH * (ctx.debug_apu.dmc_image.height - sample - 1) + i] = WHITE;
-
-        sample = (uint8_t)(ctx.debug_apu.mixer_history[index] * 127.0f);
-        ctx.debug_apu.mixer_image.data[APU_DEBUG_WIDTH * (ctx.debug_apu.mixer_image.height - sample - 1) + i] = WHITE;
     }
+}
 
-    WriteTexture(ctx.debug_apu.pulse1_image);
-    WriteTexture(ctx.debug_apu.pulse2_image);
-    WriteTexture(ctx.debug_apu.triangle_image);
-    WriteTexture(ctx.debug_apu.noise_image);
-    WriteTexture(ctx.debug_apu.dmc_image);
-    WriteTexture(ctx.debug_apu.mixer_image);
-
-    ImGui::SetWindowSize({});
-
-    ImGui::Checkbox("Pulse 1", &ctx.nes->apu.pulse1.debug.enabled);
-    ImGui::Image(ctx.debug_apu.pulse1_image.texture, { APU_DEBUG_WIDTH, ctx.debug_apu.pulse1_image.height });
-
-    ImGui::Checkbox("Pulse 2", &ctx.nes->apu.pulse2.debug.enabled);
-    ImGui::Image(ctx.debug_apu.pulse2_image.texture, { APU_DEBUG_WIDTH, ctx.debug_apu.pulse2_image.height });
-
-    ImGui::Checkbox("Triangle", &ctx.nes->apu.triangle.debug.enabled);
-    ImGui::SameLine();
-    ImGui::Checkbox("Zero when stopped", &ctx.nes->apu.triangle.debug.output_zero_when_stopped);
-    ImGui::Image(ctx.debug_apu.triangle_image.texture, { APU_DEBUG_WIDTH, ctx.debug_apu.triangle_image.height });
-
-    ImGui::Checkbox("Noise", &ctx.nes->apu.noise.debug.enabled);
-    ImGui::Image(ctx.debug_apu.noise_image.texture, { APU_DEBUG_WIDTH, ctx.debug_apu.noise_image.height });
-
-    ImGui::Checkbox("DMC", &ctx.nes->apu.dmc.debug.enabled);
-    ImGui::Image(ctx.debug_apu.dmc_image.texture, { APU_DEBUG_WIDTH, ctx.debug_apu.dmc_image.height });
-
-    ImGui::Checkbox("Mix", &ctx.nes->apu.debug.enabled);
-    ImGui::Image(ctx.debug_apu.mixer_image.texture, { APU_DEBUG_WIDTH, ctx.debug_apu.mixer_image.height });
-
+static void show_screen()
+{
+    if (ImGui::Begin("DISPLAY"))
+    {
+        write_texture(
+            ctx.screen_texture,
+            ctx.nes->screen_buffer,
+            post_process_screen);
+        draw_centred_image(ctx.screen_texture);
+    }
     ImGui::End();
 }
 
@@ -877,11 +1081,12 @@ static void on_clock()
 {
     constexpr float TICKS_PER_SAMPLE = 5369319 / AUDIO_SAMPLE_RATE;
     ctx.audio_tick_counter++;
-    if (ctx.audio_tick_counter < TICKS_PER_SAMPLE)
+    float ticks_per_sample = TICKS_PER_SAMPLE * ctx.debug_control.emulation_speed;
+    if (ctx.audio_tick_counter < ticks_per_sample)
     {
         return;
     }
-    ctx.audio_tick_counter -= TICKS_PER_SAMPLE;
+    ctx.audio_tick_counter -= ticks_per_sample;
 
     float mixed_sample = ctx.nes->apu.get_mixed_sample();
     ctx.debug_apu.pulse1_history.pop_front();
@@ -899,6 +1104,16 @@ static void on_clock()
     ctx.new_samples.push_back(mixed_sample * 2.0f - 1.0f);
 }
 
+static void clear_apu_history()
+{
+    std::fill(ctx.debug_apu.pulse1_history.begin(), ctx.debug_apu.pulse1_history.end(), 0);
+    std::fill(ctx.debug_apu.pulse2_history.begin(), ctx.debug_apu.pulse2_history.end(), 0);
+    std::fill(ctx.debug_apu.triangle_history.begin(), ctx.debug_apu.triangle_history.end(), 0);
+    std::fill(ctx.debug_apu.noise_history.begin(), ctx.debug_apu.noise_history.end(), 0);
+    std::fill(ctx.debug_apu.dmc_history.begin(), ctx.debug_apu.dmc_history.end(), 0);
+    std::fill(ctx.debug_apu.mixer_history.begin(), ctx.debug_apu.mixer_history.end(), 0.0f);
+}
+
 static void handle_key_down(SDL_KeyboardEvent key)
 {
     bool ctrl = (key.mod & (SDL_KMOD_LCTRL | SDL_KMOD_RCTRL)) != 0;
@@ -913,7 +1128,16 @@ static void handle_key_down(SDL_KeyboardEvent key)
         ctx.nes->controller.status[0].right = true;
         break;
     case SDLK_W:
-        ctx.nes->controller.status[0].up = true;
+        if (ctrl)
+        {
+            ctx.nes->unload_cart();
+            ctx.debug_control.cart_name.clear();
+            clear_apu_history();
+        }
+        else
+        {
+            ctx.nes->controller.status[0].up = true;
+        }
         break;
     case SDLK_S:
         ctx.nes->controller.status[0].down = true;
@@ -943,18 +1167,13 @@ static void handle_key_down(SDL_KeyboardEvent key)
         if (ctrl)
         {
             ctx.nes->reset();
-            std::fill(ctx.debug_apu.pulse1_history.begin(), ctx.debug_apu.pulse1_history.end(), 0);
-            std::fill(ctx.debug_apu.pulse2_history.begin(), ctx.debug_apu.pulse2_history.end(), 0);
-            std::fill(ctx.debug_apu.triangle_history.begin(), ctx.debug_apu.triangle_history.end(), 0);
-            std::fill(ctx.debug_apu.noise_history.begin(), ctx.debug_apu.noise_history.end(), 0);
-            std::fill(ctx.debug_apu.dmc_history.begin(), ctx.debug_apu.dmc_history.end(), 0);
-            std::fill(ctx.debug_apu.mixer_history.begin(), ctx.debug_apu.mixer_history.end(), 0.0f);
+            clear_apu_history();
         }
         break;
     case SDLK_P:
         if (ctrl)
         {
-            ctx.emulation_running = !ctx.emulation_running;
+            ctx.debug_control.pause = !ctx.debug_control.pause;
         }
         break;
     case SDLK_F10:
@@ -963,42 +1182,6 @@ static void handle_key_down(SDL_KeyboardEvent key)
     case SDLK_F11:
         ctx.nes->clock_instruction(on_clock);
         break;
-    }
-}
-
-static void post_process_screen(uint8_t* pixels, int width, int height, int pitch)
-{
-    if (ctx.debug_ppu.show_grid)
-    {
-        for (int y = 0; y < height; y++)
-        {
-            colour_t* row = (colour_t*)(pixels + y * pitch);
-            for (int x = 0; x < width; x++)
-            {
-                if ((x + y) % 2 == 0)
-                {
-                    row[x].r += 16;
-                    row[x].g += 16;
-                    row[x].b += 16;
-                }
-                if (x % 8 == 0 || y % 8 == 0)
-                {
-                    row[x].r += 16;
-                    row[x].g += 16;
-                    row[x].b += 16;
-                }
-            }
-        }
-    }
-
-    if (ctx.debug_ppu.show_sprite_zero_hit)
-    {
-        auto x = ctx.nes->ppu.debug.sprite_zero_hit_dot;
-        auto y = ctx.nes->ppu.debug.sprite_zero_hit_scanline;
-        if (x && y && (SDL_GetTicks() / 100) % 2 == 0)
-        {
-            ((colour_t*)(pixels + *y * pitch))[*x] = { 255, 0, 0, 255 };
-        }
     }
 }
 
@@ -1022,6 +1205,9 @@ static void load_rom(const char* rom_file)
         return;
     }
     ctx.nes->load_cart(std::move(cart));
+
+    std::filesystem::path path(rom_file);
+    ctx.debug_control.cart_name = path.stem().string();
 }
 
 int main(int argc, char* argv[])
@@ -1102,19 +1288,30 @@ int main(int argc, char* argv[])
         SDL_WINDOWPOS_CENTERED);
     SDL_ShowWindow(ctx.window);
 
-    SDL_Texture* nes_screen_texture = CreateTexture(
+    ctx.screen_texture = CreateTexture(
         nes::ppu_t::SCREEN_WIDTH,
         nes::ppu_t::SCREEN_HEIGHT);
-    if (nes_screen_texture == nullptr)
+    if (ctx.screen_texture == nullptr)
     {
-        SPDLOG_ERROR("Error: nes_screen_texture CreateTexture(): {}", SDL_GetError());
+        SPDLOG_ERROR("Error: ctx.screen_texture CreateTexture(): {}", SDL_GetError());
         return -1;
     }
 
-    if (!CreateTexture(ctx.debug_palette.image))
+    for (auto& image : ctx.debug_palette.images)
     {
-        SPDLOG_ERROR("Error: debug_palette CreateTexture(): {}", SDL_GetError());
-        return -1;
+        if (!CreateTexture(image))
+        {
+            SPDLOG_ERROR("Error: debug_palette CreateTexture(): {}", SDL_GetError());
+            return -1;
+        }
+    }
+    for (auto& image : ctx.debug_sprites.images)
+    {
+        if (!CreateTexture(image))
+        {
+            SPDLOG_ERROR("Error: debug_sprites CreateTexture(): {}", SDL_GetError());
+            return -1;
+        }
     }
     if (!CreateTexture(ctx.debug_pattern_table.image))
     {
@@ -1184,19 +1381,25 @@ int main(int argc, char* argv[])
     // Initialise imgui
 
     ImGui::CreateContext();
+
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
+    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+    
+    ImGuiStyle& style = ImGui::GetStyle();
+    style.WindowMenuButtonPosition = ImGuiDir_None;
+    style.Colors[ImGuiCol_WindowBg] = ImVec4(0.1f, 0.1f, 0.1f, 1.0f);
 
     ImGui_ImplSDL3_InitForSDLRenderer(ctx.window, ctx.renderer);
     ImGui_ImplSDLRenderer3_Init(ctx.renderer);
+    ImGui::LoadIniSettingsFromMemory(IMGUI_DEFAULT_INI);
 
     // Main loop
 
     SPDLOG_INFO("Application initialised");
     bool running = true;
     uint64_t frames_run = SDL_GetTicks() * 60 / 1000;
-    int fps_counter = 0;
     uint64_t tick_counter = SDL_GetTicks();
     while (running)
     {
@@ -1233,16 +1436,15 @@ int main(int argc, char* argv[])
 
         uint64_t current_ticks = SDL_GetTicks();
         uint64_t frames_expected = current_ticks * 60 / 1000;
-        if (ctx.emulation_running && ctx.nes->cart)
+        if (!ctx.debug_control.pause && ctx.nes->cart)
         {
             for (int i = 0; i < 5 && frames_run < frames_expected; i++)
             {
-                for (int j = 0; j < ctx.emulation_speed; j++)
+                for (int j = 0; j < ctx.debug_control.emulation_speed; j++)
                 {
                     ctx.nes->clock_frame(on_clock);
                 }
                 frames_run++;
-                fps_counter++;
             }
         }
         frames_run = frames_expected;
@@ -1250,20 +1452,12 @@ int main(int argc, char* argv[])
         SDL_PutAudioStreamData(ctx.audio_stream, ctx.new_samples.data(), (int)ctx.new_samples.size() * sizeof(float));
         ctx.new_samples.clear();
 
-        if (current_ticks / 1000 != tick_counter / 1000)
-        {
-            SDL_SetWindowTitle(ctx.window, fmt::format(
-                "NES - FPS: {}",
-                fps_counter).c_str());
-            fps_counter = 0;
-        }
-        tick_counter = current_ticks;
-
         // Begin rendering
 
         ImGui_ImplSDLRenderer3_NewFrame();
         ImGui_ImplSDL3_NewFrame();
         ImGui::NewFrame();
+        ImGui::DockSpaceOverViewport();
         SDL_RenderClear(ctx.renderer);
 
         // Render ImGui
@@ -1271,7 +1465,9 @@ int main(int argc, char* argv[])
         show_log();
         show_cpu_dism();
         show_ram();
-        show_ppu();
+        show_cpu_memory_map();
+        show_ppu_memory_map();
+        show_control();
         show_sprites();
 
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{0, 1});
@@ -1279,40 +1475,8 @@ int main(int argc, char* argv[])
         show_pattern_table();
         show_nametable();
         show_apu();
+        show_screen();
         ImGui::PopStyleVar();
-
-        // Render NES screen
-
-        WriteTexture(
-            nes_screen_texture,
-            ctx.nes->screen_buffer,
-            post_process_screen);
-
-        int window_width, window_height;
-        SDL_GetWindowSize(ctx.window, &window_width, &window_height);
-        float aspect = (float)window_width / window_height;
-        if (aspect < nes::ppu_t::SCREEN_ASPECT)
-        {
-            float new_height = window_width / nes::ppu_t::SCREEN_ASPECT;
-            SDL_FRect dst_rect = {
-                0.0f,
-                (window_height - new_height) / 2.0f,
-                (float)window_width,
-                new_height,
-            };
-            SDL_RenderTexture(ctx.renderer, nes_screen_texture, nullptr, &dst_rect);
-        }
-        else
-        {
-            float new_width = window_height * nes::ppu_t::SCREEN_ASPECT;
-            SDL_FRect dst_rect = {
-                (window_width - new_width) / 2.0f,
-                0.0f,
-                new_width,
-                (float)window_height,
-            };
-            SDL_RenderTexture(ctx.renderer, nes_screen_texture, nullptr, &dst_rect);
-        }
 
         // End rendering
 
@@ -1330,7 +1494,14 @@ int main(int argc, char* argv[])
     SDL_UnbindAudioStream(ctx.audio_stream);
     SDL_DestroyAudioStream(ctx.audio_stream);
     SDL_CloseAudioDevice(ctx.audio_device);
-    SDL_DestroyTexture(ctx.debug_palette.image.texture);
+    for (auto& image : ctx.debug_palette.images)
+    {
+        SDL_DestroyTexture(image.texture);
+    }
+    for (auto& image : ctx.debug_sprites.images)
+    {
+        SDL_DestroyTexture(image.texture);
+    }
     SDL_DestroyTexture(ctx.debug_pattern_table.image.texture);
     SDL_DestroyTexture(ctx.debug_nametable.image.texture);
     SDL_DestroyTexture(ctx.debug_apu.pulse1_image.texture);
@@ -1339,7 +1510,7 @@ int main(int argc, char* argv[])
     SDL_DestroyTexture(ctx.debug_apu.noise_image.texture);
     SDL_DestroyTexture(ctx.debug_apu.dmc_image.texture);
     SDL_DestroyTexture(ctx.debug_apu.mixer_image.texture);
-    SDL_DestroyTexture(nes_screen_texture);
+    SDL_DestroyTexture(ctx.screen_texture);
     SDL_DestroyRenderer(ctx.renderer);
     SDL_DestroyWindow(ctx.window);
     SDL_Quit();

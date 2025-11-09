@@ -3,6 +3,7 @@
 #include "mirroring.h"
 
 #define MAPPER_DEFINE_RESET(T) void T::reset() { *this = T(*cart); }
+#define MAPPER_DEFINE_NAME(T, name) const char* T::get_name() const { return name; }
 
 namespace nes
 {
@@ -13,6 +14,7 @@ namespace nes
         mapper_t(cart_t& cart);
         virtual ~mapper_t() = default;
         virtual void reset() = 0;
+        virtual const char* get_name() const = 0;
         virtual bool cpu_read(uint16_t addr, uint8_t& value, bool allow_side_effects);
         virtual bool cpu_write(uint16_t addr, uint8_t value);
         virtual bool ppu_read(uint16_t addr, uint8_t& value, bool allow_side_effects);

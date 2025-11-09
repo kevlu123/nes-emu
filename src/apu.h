@@ -31,19 +31,6 @@ namespace nes
         uint8_t decay_level_counter;
     };
 
-    struct sweep_t
-    {
-        sweep_t(bool is_pulse2);;
-        void clock();
-
-        bool enabled;
-        uint8_t period;
-        bool negate;
-        uint8_t shift;
-        uint8_t divider;
-        bool reload;
-    };
-
     struct pulse_channel_t
     {
         static constexpr bool SEQUENCE_LUT[4][8] = {

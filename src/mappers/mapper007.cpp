@@ -11,6 +11,7 @@ namespace nes
     }
 
     MAPPER_DEFINE_RESET(mapper007_t);
+    MAPPER_DEFINE_NAME(mapper007_t, "AxROM");
 
     bool mapper007_t::cpu_read(uint16_t addr, uint8_t& value, bool readonly)
     {
