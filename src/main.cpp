@@ -102,6 +102,16 @@ static constexpr colour_t NTSC_PALETTE[64] = {
 	colour_t{ 0,   0,   0  , 255 },
 };
 
+enum class action_t
+{
+    reset,
+    unload_cart,
+    clock_frame,
+    clock_scanline,
+    clock_instruction,
+    clock_dot,
+};
+
 template <size_t Width, size_t Height>
 struct debug_image_t
 {
@@ -131,8 +141,10 @@ static struct
 
     struct
     {
+        bool fullscreen = false;
         bool show_grid = false;
         bool show_sprite_zero_hit = false;
+        int show_pixel_trace = 0;
         bool pause = false;
         int emulation_speed = 1;
         std::string cart_name;
@@ -186,6 +198,47 @@ static struct
 static ImVec2 operator+(const ImVec2& a, const ImVec2& b)
 {
     return ImVec2{ a.x + b.x, a.y + b.y };
+}
+
+static void clear_apu_history()
+{
+    std::fill(ctx.debug_apu.pulse1_history.begin(), ctx.debug_apu.pulse1_history.end(), 0);
+    std::fill(ctx.debug_apu.pulse2_history.begin(), ctx.debug_apu.pulse2_history.end(), 0);
+    std::fill(ctx.debug_apu.triangle_history.begin(), ctx.debug_apu.triangle_history.end(), 0);
+    std::fill(ctx.debug_apu.noise_history.begin(), ctx.debug_apu.noise_history.end(), 0);
+    std::fill(ctx.debug_apu.dmc_history.begin(), ctx.debug_apu.dmc_history.end(), 0);
+    std::fill(ctx.debug_apu.mixer_history.begin(), ctx.debug_apu.mixer_history.end(), 0.0f);
+}
+
+static void do_action(action_t action)
+{
+    switch (action)
+    {
+    case action_t::reset:
+        ctx.nes->reset();
+        clear_apu_history();
+        break;
+    case action_t::unload_cart:
+        ctx.nes->unload_cart();
+        ctx.debug_control.cart_name.clear();
+        clear_apu_history();
+        break;
+    case action_t::clock_frame:
+        ctx.nes->clock_frame();
+        break;
+    case action_t::clock_scanline:
+        ctx.nes->clock_scanline();
+        break;
+    case action_t::clock_instruction:
+        ctx.nes->clock_instruction();
+        break;
+    case action_t::clock_dot:
+        ctx.nes->clock();
+        break;
+    default:
+        SPDLOG_ERROR("Unknown action");
+        break;
+    }
 }
 
 static SDL_Texture* CreateTexture(int width, int height)
@@ -877,7 +930,14 @@ static void show_control()
         {
             ImGui::Text("Cartridge: %s", ctx.debug_control.cart_name.c_str());
             ImGui::Text("  PRG:    %d KB", ctx.nes->cart->header.prg_chunks * 16);
-            ImGui::Text("  CHR:    %d KB", ctx.nes->cart->header.chr_chunks * 8);
+            if (ctx.nes->cart->header.chr_chunks)
+            {
+                ImGui::Text("  CHR:    %d KB", ctx.nes->cart->header.chr_chunks * 8);
+            }
+            else
+            {
+                ImGui::Text("  CHR:    8 KB (CHR-RAM)");
+            }
             ImGui::Text("  Mapper: %d (%s)",
                 ctx.nes->cart->header.mapper_number_lower
                     | (ctx.nes->cart->header.mapper_number_upper << 4),
@@ -890,15 +950,59 @@ static void show_control()
             ImGui::Text("  CHR:    -");
             ImGui::Text("  Mapper: -");
         }
-        draw_separator();
 
-        ImGui::SliderInt("Speed", &ctx.debug_control.emulation_speed, 1, 4, "%dx", ImGuiSliderFlags_AlwaysClamp);
+        draw_separator();
+        ImGui::Text("Dot %d, scanline %d", ctx.nes->ppu.dot, ctx.nes->ppu.scanline);
+
+        draw_separator();
+        if (ImGui::Button("Step frame"))
+        {
+            do_action(action_t::clock_frame);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Step scanline"))
+        {
+            do_action(action_t::clock_scanline);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Step CPU"))
+        {
+            do_action(action_t::clock_instruction);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Step PPU"))
+        {
+            do_action(action_t::clock_dot);
+        }
+
+        draw_separator();
+        if (ImGui::Button("Reset"))
+        {
+            ctx.nes->reset();
+        }
+
+        draw_separator();
+        ImGui::SliderInt("Speed", &ctx.debug_control.emulation_speed, 1, 4, "%dx", ImGuiSliderFlags_NoInput);
         ImGui::Checkbox("Pause", &ctx.debug_control.pause);
+
+        draw_separator();
+        ImGui::Checkbox("Fullscreen", &ctx.debug_control.fullscreen);
+
+        draw_separator();
         ImGui::Checkbox("Show background", &ctx.nes->ppu.debug.enable_bg);
         ImGui::Checkbox("Show sprites", &ctx.nes->ppu.debug.enable_fg);
         ImGui::Checkbox("Show grid", &ctx.debug_control.show_grid);
         ImGui::Checkbox("Show sprite 0 hit", &ctx.debug_control.show_sprite_zero_hit);
-        ImGui::Checkbox("Enable greyscale", &ctx.nes->ppu.debug.enable_greyscale);
+        ImGui::Checkbox("Force greyscale", &ctx.nes->ppu.debug.enable_greyscale);
+        ImGui::Checkbox("Enable pixel tracing", &ctx.nes->ppu.debug.enable_pixel_trace);
+
+        if (ctx.nes->ppu.debug.enable_pixel_trace
+                && ctx.debug_control.show_pixel_trace
+                && ImGui::BeginTooltip())
+        {
+            ImGui::Text("test");
+            ImGui::EndTooltip();
+        }
     }
     ImGui::End();
 }
@@ -1074,6 +1178,84 @@ static void handle_key_up(SDL_KeyboardEvent key)
     case SDLK_RETURN:
         ctx.nes->controller.status[0].start = false;
         break;
+    case SDLK_LCTRL:
+        ctx.debug_control.show_pixel_trace &= ~1;
+        break;
+    case SDLK_RCTRL:
+        ctx.debug_control.show_pixel_trace &= ~2;
+        break;
+    }
+}
+
+static void handle_key_down(SDL_KeyboardEvent key)
+{
+    bool ctrl = (key.mod & (SDL_KMOD_LCTRL | SDL_KMOD_RCTRL)) != 0;
+    bool alt = (key.mod & (SDL_KMOD_LALT | SDL_KMOD_RALT)) != 0;
+    bool shift = (key.mod & (SDL_KMOD_LSHIFT | SDL_KMOD_RSHIFT)) != 0;
+    switch (key.key)
+    {
+    case SDLK_A:
+        ctx.nes->controller.status[0].left = true;
+        break;
+    case SDLK_D:
+        ctx.nes->controller.status[0].right = true;
+        break;
+    case SDLK_W:
+        if (ctrl)
+        {
+            do_action(action_t::unload_cart);
+        }
+        else
+        {
+            ctx.nes->controller.status[0].up = true;
+        }
+        break;
+    case SDLK_S:
+        ctx.nes->controller.status[0].down = true;
+        break;
+    case SDLK_SEMICOLON:
+        ctx.nes->controller.status[0].b = true;
+        break;
+    case SDLK_APOSTROPHE:
+        ctx.nes->controller.status[0].a = true;
+        break;
+    case SDLK_RSHIFT:
+        ctx.nes->controller.status[0].select = true;
+        break;
+    case SDLK_RETURN:
+        if (alt)
+        {
+            ctx.debug_control.fullscreen = !ctx.debug_control.fullscreen;
+        }
+        else
+        {
+            ctx.nes->controller.status[0].start = true;
+        }
+        break;
+    case SDLK_R:
+        if (ctrl)
+        {
+            do_action(action_t::reset);
+        }
+        break;
+    case SDLK_P:
+        if (ctrl)
+        {
+            ctx.debug_control.pause = !ctx.debug_control.pause;
+        }
+        break;
+    case SDLK_F10:
+        do_action(shift ? action_t::clock_scanline : action_t::clock_frame);
+        break;
+    case SDLK_F11:
+        do_action(shift ? action_t::clock_dot : action_t::clock_instruction);
+        break;
+    case SDLK_LCTRL:
+        ctx.debug_control.show_pixel_trace |= 1;
+        break;
+    case SDLK_RCTRL:
+        ctx.debug_control.show_pixel_trace |= 2;
+        break;
     }
 }
 
@@ -1102,87 +1284,6 @@ static void on_clock()
     ctx.debug_apu.mixer_history.pop_front();
     ctx.debug_apu.mixer_history.push_back(mixed_sample);
     ctx.new_samples.push_back(mixed_sample * 2.0f - 1.0f);
-}
-
-static void clear_apu_history()
-{
-    std::fill(ctx.debug_apu.pulse1_history.begin(), ctx.debug_apu.pulse1_history.end(), 0);
-    std::fill(ctx.debug_apu.pulse2_history.begin(), ctx.debug_apu.pulse2_history.end(), 0);
-    std::fill(ctx.debug_apu.triangle_history.begin(), ctx.debug_apu.triangle_history.end(), 0);
-    std::fill(ctx.debug_apu.noise_history.begin(), ctx.debug_apu.noise_history.end(), 0);
-    std::fill(ctx.debug_apu.dmc_history.begin(), ctx.debug_apu.dmc_history.end(), 0);
-    std::fill(ctx.debug_apu.mixer_history.begin(), ctx.debug_apu.mixer_history.end(), 0.0f);
-}
-
-static void handle_key_down(SDL_KeyboardEvent key)
-{
-    bool ctrl = (key.mod & (SDL_KMOD_LCTRL | SDL_KMOD_RCTRL)) != 0;
-    bool alt = (key.mod & (SDL_KMOD_LALT | SDL_KMOD_RALT)) != 0;
-    bool shift = (key.mod & (SDL_KMOD_LSHIFT | SDL_KMOD_RSHIFT)) != 0;
-    switch (key.key)
-    {
-    case SDLK_A:
-        ctx.nes->controller.status[0].left = true;
-        break;
-    case SDLK_D:
-        ctx.nes->controller.status[0].right = true;
-        break;
-    case SDLK_W:
-        if (ctrl)
-        {
-            ctx.nes->unload_cart();
-            ctx.debug_control.cart_name.clear();
-            clear_apu_history();
-        }
-        else
-        {
-            ctx.nes->controller.status[0].up = true;
-        }
-        break;
-    case SDLK_S:
-        ctx.nes->controller.status[0].down = true;
-        break;
-    case SDLK_SEMICOLON:
-        ctx.nes->controller.status[0].b = true;
-        break;
-    case SDLK_APOSTROPHE:
-        ctx.nes->controller.status[0].a = true;
-        break;
-    case SDLK_RSHIFT:
-        ctx.nes->controller.status[0].select = true;
-        break;
-    case SDLK_RETURN:
-        if (alt)
-        {
-            bool is_fullscreen = SDL_GetWindowFlags(ctx.window)
-                & SDL_WINDOW_FULLSCREEN;
-            SDL_SetWindowFullscreen(ctx.window, !is_fullscreen);
-        }
-        else
-        {
-            ctx.nes->controller.status[0].start = true;
-        }
-        break;
-    case SDLK_R:
-        if (ctrl)
-        {
-            ctx.nes->reset();
-            clear_apu_history();
-        }
-        break;
-    case SDLK_P:
-        if (ctrl)
-        {
-            ctx.debug_control.pause = !ctx.debug_control.pause;
-        }
-        break;
-    case SDLK_F10:
-        ctx.nes->clock_frame(on_clock);
-        break;
-    case SDLK_F11:
-        ctx.nes->clock_instruction(on_clock);
-        break;
-    }
 }
 
 static void load_rom(const char* rom_file)
@@ -1244,7 +1345,7 @@ int main(int argc, char* argv[])
     });
     spdlog::set_default_logger(logger);
 
-    ctx.nes = std::make_unique<nes::nes_t>();
+    ctx.nes = std::make_unique<nes::nes_t>(on_clock);
 
     if (argc >= 2)
     {
@@ -1442,7 +1543,7 @@ int main(int argc, char* argv[])
             {
                 for (int j = 0; j < ctx.debug_control.emulation_speed; j++)
                 {
-                    ctx.nes->clock_frame(on_clock);
+                    ctx.nes->clock_frame();
                 }
                 frames_run++;
             }
@@ -1483,6 +1584,16 @@ int main(int argc, char* argv[])
         ImGui::Render();
         ImGui_ImplSDLRenderer3_RenderDrawData(ImGui::GetDrawData(), ctx.renderer);
         SDL_RenderPresent(ctx.renderer);
+
+        bool is_fullscreen = SDL_GetWindowFlags(ctx.window) & SDL_WINDOW_FULLSCREEN;
+        if (is_fullscreen != ctx.debug_control.fullscreen)
+        {
+            if (!SDL_SetWindowFullscreen(ctx.window, ctx.debug_control.fullscreen))
+            {
+                SPDLOG_ERROR("Error: SDL_SetWindowFullscreen(): {}", SDL_GetError());
+                break;
+            }
+        }
     }
 
     SPDLOG_INFO("Application exiting");

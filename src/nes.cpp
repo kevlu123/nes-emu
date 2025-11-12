@@ -4,13 +4,14 @@
 
 namespace nes
 {
-    nes_t::nes_t()
+    nes_t::nes_t(std::function<void()> on_clock)
         : cpu(cpu_bus),
           ppu(ppu_bus, oam_dma, screen_buffer),
           apu(cpu_bus),
           oam_dma(cpu_bus),
           ppu_clock_count(0),
           screen_buffer{},
+          on_clock(on_clock),
           cpu_bus(0xFFFF, "CPU"),
           ppu_bus(0x3FFF, "PPU")
     {
@@ -66,29 +67,35 @@ namespace nes
         }
         ppu.clock();
         ppu_clock_count++;
+        on_clock();
     }
 
-    void nes_t::clock_instruction(std::function<void()> on_clock)
+    void nes_t::clock_instruction()
     {
         while (cpu.cycles_until_next_instruction == 0)
         {
             clock();
-            on_clock();
         }
         while (cpu.cycles_until_next_instruction > 0)
         {
             clock();
-            on_clock();
         }
     }
 
-    void nes_t::clock_frame(std::function<void()> on_clock)
+    void nes_t::clock_scanline()
+    {
+        for (int i = 0; i < ppu_t::DOTS_PER_SCANLINE; i++)
+        {
+            clock();
+        }
+    }
+
+    void nes_t::clock_frame()
     {
         do
         {
             clock();
-            on_clock();
-        } while (ppu.scanline != 0 || ppu.dot != 0);
+        } while (!(ppu.scanline == 0 && ppu.dot == 0));
     }
 
     void nes_t::unload_cart()

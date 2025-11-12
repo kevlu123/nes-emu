@@ -238,6 +238,7 @@ namespace nes
             bool enable_bg = true;
             bool enable_fg = true;
             bool enable_greyscale = false;
+            bool enable_pixel_trace = false;
         } debug;
 
     private:
