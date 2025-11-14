@@ -811,7 +811,36 @@ static void show_nametable()
             }
         }
 
-        write_texture(ctx.debug_nametable.image);
+        write_texture(ctx.debug_nametable.image, [](uint8_t *pixels, int width, int height, int pitch)
+        {
+            size_t left = (ctx.nes->ppu.t_vram_addr.nametable_select & 1) * 256
+                + ctx.nes->ppu.t_vram_addr.coarse_x_scroll * 8
+                + ctx.nes->ppu.x_scroll.value;
+            size_t top = (ctx.nes->ppu.t_vram_addr.nametable_select >> 1) * 240
+                + ctx.nes->ppu.t_vram_addr.coarse_y_scroll * 8
+                + ctx.nes->ppu.t_vram_addr.fine_y_scroll;
+            auto draw_red = [&](size_t x, size_t y)
+            {
+                size_t xx = x % 512;
+                size_t yy = y % 480;
+                if (yy >= 240)
+                {
+                    yy += 16;
+                }
+                colour_t* row = (colour_t*)(pixels + yy * pitch);
+                row[xx] = { 255, 0, 0, 255 };
+            };
+            for (size_t y = 0; y < nes::ppu_t::SCREEN_HEIGHT; y++)
+            {
+                draw_red(left, top + y);
+                draw_red(left + nes::ppu_t::SCREEN_WIDTH - 1, top + y);
+            }
+            for (size_t x = 1; x < nes::ppu_t::SCREEN_WIDTH - 1; x++)
+            {
+                draw_red(left + x, top);
+                draw_red(left + x, top + nes::ppu_t::SCREEN_HEIGHT - 1);
+            }
+        });
         draw_centred_image(ctx.debug_nametable.image.texture);
     }
     ImGui::End();
@@ -952,7 +981,16 @@ static void show_control()
         }
 
         draw_separator();
-        ImGui::Text("Dot %d, scanline %d", ctx.nes->ppu.dot, ctx.nes->ppu.scanline);
+        ImGui::Text("Dot:      %d", ctx.nes->ppu.dot);
+        ImGui::Text("Scanline: %d", ctx.nes->ppu.scanline);
+        ImGui::Text("Scroll X: %d (+%d)",
+            ctx.nes->ppu.t_vram_addr.coarse_x_scroll * 8
+                + ctx.nes->ppu.x_scroll.value,
+            (ctx.nes->ppu.t_vram_addr.nametable_select & 1) ? 256 : 0);
+        ImGui::Text("Scroll Y: %d (+%d)",
+            ctx.nes->ppu.t_vram_addr.coarse_y_scroll * 8
+                + ctx.nes->ppu.t_vram_addr.fine_y_scroll,
+            (ctx.nes->ppu.t_vram_addr.nametable_select & 2) ? 240 : 0);
 
         draw_separator();
         if (ImGui::Button("Step frame"))
@@ -1099,52 +1137,47 @@ static void show_apu()
     ImGui::End();
 }
 
-static void post_process_screen(uint8_t* pixels, int width, int height, int pitch)
-{
-    if (ctx.debug_control.show_grid)
-    {
-        for (int y = 0; y < height; y++)
-        {
-            colour_t* row = (colour_t*)(pixels + y * pitch);
-            for (int x = 0; x < width; x++)
-            {
-                if ((x + y) % 2 == 0)
-                {
-                    row[x].r += 16;
-                    row[x].g += 16;
-                    row[x].b += 16;
-                }
-                if (x % 8 == 0 || y % 8 == 0)
-                {
-                    row[x].r += 16;
-                    row[x].g += 16;
-                    row[x].b += 16;
-                }
-            }
-        }
-    }
-
-    if (ctx.debug_control.show_sprite_zero_hit)
-    {
-        auto& x = ctx.nes->ppu.debug.sprite_zero_hit_dot;
-        auto& y = ctx.nes->ppu.debug.sprite_zero_hit_scanline;
-        if (x && y && (SDL_GetTicks() / 100) % 2 == 0)
-        {
-            ((colour_t*)(pixels + *y * pitch))[*x] = { 255, 0, 0, 255 };
-            x = std::nullopt;
-            y = std::nullopt;
-        }
-    }
-}
-
 static void show_screen()
 {
     if (ImGui::Begin("DISPLAY"))
     {
-        write_texture(
-            ctx.screen_texture,
-            ctx.nes->screen_buffer,
-            post_process_screen);
+        write_texture(ctx.screen_texture, ctx.nes->screen_buffer, [](uint8_t* pixels, int width, int height, int pitch)
+        {
+            if (ctx.debug_control.show_grid)
+            {
+                for (int y = 0; y < height; y++)
+                {
+                    colour_t* row = (colour_t*)(pixels + y * pitch);
+                    for (int x = 0; x < width; x++)
+                    {
+                        if ((x + y) % 2 == 0)
+                        {
+                            row[x].r += 16;
+                            row[x].g += 16;
+                            row[x].b += 16;
+                        }
+                        if (x % 8 == 0 || y % 8 == 0)
+                        {
+                            row[x].r += 16;
+                            row[x].g += 16;
+                            row[x].b += 16;
+                        }
+                    }
+                }
+            }
+
+            if (ctx.debug_control.show_sprite_zero_hit)
+            {
+                auto& x = ctx.nes->ppu.debug.sprite_zero_hit_dot;
+                auto& y = ctx.nes->ppu.debug.sprite_zero_hit_scanline;
+                if (x && y && (SDL_GetTicks() / 100) % 2 == 0)
+                {
+                    ((colour_t*)(pixels + *y * pitch))[*x] = { 255, 0, 0, 255 };
+                    x = std::nullopt;
+                    y = std::nullopt;
+                }
+            }
+        });
         draw_centred_image(ctx.screen_texture);
     }
     ImGui::End();
