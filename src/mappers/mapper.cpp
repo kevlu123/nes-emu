@@ -51,7 +51,7 @@ namespace nes
     {
         if (addr < 0x2000)
         {
-            cart->chr_ram[addr % cart->chr_ram.size()] = value;
+            cart->chr[addr % cart->chr.size()] = value;
             return true;
         }
         return false;

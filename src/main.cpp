@@ -122,6 +122,14 @@ struct debug_image_t
     uint8_t data[Width * Height] = { 0 };
 };
 
+enum class memory_edit_type_t
+{
+    none,
+    ram,
+    cpu_map,
+    ppu_map,
+};
+
 struct log_msg_t
 {
     std::string text;
@@ -149,6 +157,11 @@ static struct
         int emulation_speed = 1;
         std::optional<nes::pixel_trace_t> pixel_trace;
         std::string cart_name;
+        memory_edit_type_t memory_edit_mode = memory_edit_type_t::none;
+        uint16_t memory_edit_addr = 0;
+        uint16_t memory_edit_addr_mask = 0xFFFF;
+        int memory_edit_nybble = 0;
+        int memory_edit_window_active = 0;
     } debug_control;
 
     struct
@@ -199,6 +212,11 @@ static struct
 static ImVec2 operator+(const ImVec2& a, const ImVec2& b)
 {
     return ImVec2{ a.x + b.x, a.y + b.y };
+}
+
+static ImVec2 operator-(const ImVec2& a, const ImVec2& b)
+{
+    return ImVec2{ a.x - b.x, a.y - b.y };
 }
 
 static void clear_apu_history()
@@ -580,9 +598,11 @@ static void show_cpu_dism()
     ImGui::End();
 }
 
-static void show_memory(nes::bus_t& bus, size_t start_addr, size_t end_addr)
+static void show_memory(nes::bus_t& bus, size_t end_addr, memory_edit_type_t type)
 {
-    for (size_t i = start_addr; i < end_addr; i += 0x100)
+    ImVec2 content_pos = ImGui::GetCursorPos();
+
+    for (size_t i = 0; i < end_addr; i += 0x100)
     {
         if (i)
         {
@@ -590,52 +610,128 @@ static void show_memory(nes::bus_t& bus, size_t start_addr, size_t end_addr)
         }
         for (size_t j = 0; j < 0x100; j += 16)
         {
+            size_t addr = i + j;
+            if (ctx.debug_control.memory_edit_mode == type
+                && ctx.debug_control.memory_edit_addr >= addr
+                && ctx.debug_control.memory_edit_addr < addr + 16)
+            {
+                float char_width = ImGui::CalcTextSize("X").x;
+                float x = char_width * (
+                    + 6
+                    + ctx.debug_control.memory_edit_addr % 16 * 3
+                    + ctx.debug_control.memory_edit_nybble
+                    + ctx.debug_control.memory_edit_addr % 16 / 4);
+                ImGui::GetWindowDrawList()->AddRectFilled(
+                    ImGui::GetCursorScreenPos() + ImVec2(x, 0.0f),
+                    ImGui::GetCursorScreenPos() + ImVec2(x, 0.0f) + ImGui::CalcTextSize("X"),
+                    IM_COL32(128, 128, 128, 255));
+            }
             ImGui::Text("%04X: %02X %02X %02X %02X  %02X %02X %02X %02X  "
                 "%02X %02X %02X %02X  %02X %02X %02X %02X",
                 i + j,
-                bus.read((uint16_t)(i + j +  0), false),
-                bus.read((uint16_t)(i + j +  1), false),
-                bus.read((uint16_t)(i + j +  2), false),
-                bus.read((uint16_t)(i + j +  3), false),
-                bus.read((uint16_t)(i + j +  4), false),
-                bus.read((uint16_t)(i + j +  5), false),
-                bus.read((uint16_t)(i + j +  6), false),
-                bus.read((uint16_t)(i + j +  7), false),
-                bus.read((uint16_t)(i + j +  8), false),
-                bus.read((uint16_t)(i + j +  9), false),
-                bus.read((uint16_t)(i + j + 10), false),
-                bus.read((uint16_t)(i + j + 11), false),
-                bus.read((uint16_t)(i + j + 12), false),
-                bus.read((uint16_t)(i + j + 13), false),
-                bus.read((uint16_t)(i + j + 14), false),
-                bus.read((uint16_t)(i + j + 15), false));
+                bus.read((uint16_t)(addr +  0), false),
+                bus.read((uint16_t)(addr +  1), false),
+                bus.read((uint16_t)(addr +  2), false),
+                bus.read((uint16_t)(addr +  3), false),
+                bus.read((uint16_t)(addr +  4), false),
+                bus.read((uint16_t)(addr +  5), false),
+                bus.read((uint16_t)(addr +  6), false),
+                bus.read((uint16_t)(addr +  7), false),
+                bus.read((uint16_t)(addr +  8), false),
+                bus.read((uint16_t)(addr +  9), false),
+                bus.read((uint16_t)(addr + 10), false),
+                bus.read((uint16_t)(addr + 11), false),
+                bus.read((uint16_t)(addr + 12), false),
+                bus.read((uint16_t)(addr + 13), false),
+                bus.read((uint16_t)(addr + 14), false),
+                bus.read((uint16_t)(addr + 15), false));
         }
+    }
+
+    if (ImGui::GetIO().MouseClicked[0] && ImGui::IsWindowHovered())
+    {
+        ImVec2 mouse_pos = ImGui::GetMousePos();
+        ImVec2 window_pos = ImGui::GetWindowPos();
+        ImVec2 relative_pos = mouse_pos - window_pos - content_pos;
+        relative_pos.y += ImGui::GetScrollY();
+        float line_height = ImGui::GetTextLineHeightWithSpacing();
+
+        int col;
+        int nybble;
+        int row = (int)(relative_pos.y / line_height);
+        if (row % 17 == 16)
+        {
+            goto clicked_off;
+        }
+        row -= row / 17;
+        col = (int)(relative_pos.x / ImGui::CalcTextSize("X").x) - 6;
+        if (col < 0 || col % 13 == 12)
+        {
+            goto clicked_off;
+        }
+        col -= col / 13;
+        if (col % 3 == 2)
+        {
+            goto clicked_off;
+        }
+        nybble = col % 3;
+        col /= 3;
+
+        if (row >= 0 && row < end_addr / 16 && col >= 0 && col < 16 &&
+            (ctx.debug_control.memory_edit_mode != type
+                || ctx.debug_control.memory_edit_addr != (uint16_t)(row * 16 + col)
+                || ctx.debug_control.memory_edit_nybble != nybble))
+        {
+            ctx.debug_control.memory_edit_mode = type;
+            ctx.debug_control.memory_edit_addr = (uint16_t)(row * 16 + col);
+            ctx.debug_control.memory_edit_addr_mask = (uint16_t)(end_addr - 1);
+            ctx.debug_control.memory_edit_nybble = nybble;
+            return;
+        }
+
+    clicked_off:
+        ctx.debug_control.memory_edit_mode = memory_edit_type_t::none;
     }
 }
 
 static void show_ram()
 {
+    ctx.debug_control.memory_edit_window_active &= ~1;
     if (ImGui::Begin("RAM"))
     {
-        show_memory(ctx.nes->cpu_bus, 0x0000, 0x0800);
+        show_memory(ctx.nes->cpu_bus, 0x0800, memory_edit_type_t::ram);
+        if (ImGui::IsWindowFocused())
+        {
+            ctx.debug_control.memory_edit_window_active |= 1;
+        }
     }
     ImGui::End();
 }
 
 static void show_cpu_memory_map()
 {
+    ctx.debug_control.memory_edit_window_active &= ~2;
     if (ImGui::Begin("CPU MAP"))
     {
-        show_memory(ctx.nes->cpu_bus, 0x0000, 0x10000);
+        show_memory(ctx.nes->cpu_bus, 0x10000, memory_edit_type_t::cpu_map);
+        if (ImGui::IsWindowFocused())
+        {
+            ctx.debug_control.memory_edit_window_active |= 2;
+        }
     }
     ImGui::End();
 }
 
 static void show_ppu_memory_map()
 {
+    ctx.debug_control.memory_edit_window_active &= ~4;
     if (ImGui::Begin("PPU MAP"))
     {
-        show_memory(ctx.nes->ppu_bus, 0x0000, 0x4000);
+        show_memory(ctx.nes->ppu_bus, 0x4000, memory_edit_type_t::ppu_map);
+        if (ImGui::IsWindowFocused())
+        {
+            ctx.debug_control.memory_edit_window_active |= 4;
+        }
     }
     ImGui::End();
 }
@@ -1282,7 +1378,7 @@ static void show_screen()
     ImGui::End();
 }
 
-static void handle_key_up(SDL_KeyboardEvent key)
+static void handle_key_up(const SDL_KeyboardEvent& key)
 {
     switch (key.key)
     {
@@ -1319,11 +1415,68 @@ static void handle_key_up(SDL_KeyboardEvent key)
     }
 }
 
-static void handle_key_down(SDL_KeyboardEvent key)
+static bool handle_memory_edit_key_down(const SDL_KeyboardEvent& key)
+{
+    if (ctx.debug_control.memory_edit_mode == memory_edit_type_t::none
+        || !ctx.debug_control.memory_edit_window_active)
+    {
+        return false;
+    }
+
+    int value = 0;
+    switch (key.key)
+    {
+    case SDLK_0: value = 0x0; break;
+    case SDLK_1: value = 0x1; break;
+    case SDLK_2: value = 0x2; break;
+    case SDLK_3: value = 0x3; break;
+    case SDLK_4: value = 0x4; break;
+    case SDLK_5: value = 0x5; break;
+    case SDLK_6: value = 0x6; break;
+    case SDLK_7: value = 0x7; break;
+    case SDLK_8: value = 0x8; break;
+    case SDLK_9: value = 0x9; break;
+    case SDLK_A: value = 0xA; break;
+    case SDLK_B: value = 0xB; break;
+    case SDLK_C: value = 0xC; break;
+    case SDLK_D: value = 0xD; break;
+    case SDLK_E: value = 0xE; break;
+    case SDLK_F: value = 0xF; break;
+    default: return false;
+    }
+
+    nes::bus_t& bus = ctx.debug_control.memory_edit_mode == memory_edit_type_t::ppu_map
+        ? ctx.nes->ppu_bus
+        : ctx.nes->cpu_bus;
+    uint8_t old_value = bus.read(ctx.debug_control.memory_edit_addr, false);
+    if (ctx.debug_control.memory_edit_nybble == 0)
+    {
+        uint8_t new_value = (old_value & 0x0F) | (value << 4);
+        bus.write(ctx.debug_control.memory_edit_addr, new_value);
+        ctx.debug_control.memory_edit_nybble = 1;
+    }
+    else
+    {
+        uint8_t new_value = (old_value & 0xF0) | value;
+        bus.write(ctx.debug_control.memory_edit_addr, new_value);
+        ctx.debug_control.memory_edit_nybble = 0;
+        ctx.debug_control.memory_edit_addr = (ctx.debug_control.memory_edit_addr + 1)
+            & ctx.debug_control.memory_edit_addr_mask;
+    }
+    return true;
+}
+
+static void handle_key_down(const SDL_KeyboardEvent& key)
 {
     bool ctrl = (key.mod & (SDL_KMOD_LCTRL | SDL_KMOD_RCTRL)) != 0;
     bool alt = (key.mod & (SDL_KMOD_LALT | SDL_KMOD_RALT)) != 0;
     bool shift = (key.mod & (SDL_KMOD_LSHIFT | SDL_KMOD_RSHIFT)) != 0;
+
+    if (!ctrl && !alt && !shift &&handle_memory_edit_key_down(key))
+    {
+        return;
+    }
+
     switch (key.key)
     {
     case SDLK_A:
