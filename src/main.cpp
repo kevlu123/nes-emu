@@ -20,6 +20,7 @@
 #include <filesystem>
 
 constexpr size_t AUDIO_SAMPLE_RATE = 48000;
+constexpr size_t MAX_AUDIO_LATENCY_MS = 100;
 constexpr size_t APU_DEBUG_WIDTH = 1024;
 constexpr size_t MIXER_HISTORY_LENGTH = AUDIO_SAMPLE_RATE * 2;
 constexpr size_t MAX_DEBUG_LOG_LINES = 512;
@@ -140,9 +141,9 @@ static struct
 {
     SDL_Window* window = nullptr;
     SDL_Renderer* renderer = nullptr;
-    SDL_AudioDeviceID audio_device = 0;
     SDL_AudioStream *audio_stream = nullptr;
     std::vector<float> new_samples;
+    float last_sample = 0.0f;
     std::unique_ptr<nes::nes_t> nes;
     SDL_Texture* screen_texture = nullptr;
     float audio_tick_counter = 0;
@@ -217,6 +218,29 @@ static ImVec2 operator+(const ImVec2& a, const ImVec2& b)
 static ImVec2 operator-(const ImVec2& a, const ImVec2& b)
 {
     return ImVec2{ a.x - b.x, a.y - b.y };
+}
+
+static void audio_callback(void* userdata, SDL_AudioStream* stream, int additional_amount, int total_amount)
+{
+    if (additional_amount == 0)
+    {
+        return;
+    }
+    size_t want_samples = (size_t)(additional_amount / sizeof(float));
+    if (ctx.new_samples.size() < want_samples)
+    {
+        // Not enough audio. Pad with the last sample.
+        ctx.new_samples.resize(want_samples, ctx.last_sample);
+    }
+    else if (ctx.new_samples.size() - want_samples >= MAX_AUDIO_LATENCY_MS * AUDIO_SAMPLE_RATE / 1000)
+    {
+        // We have too much audio. Discard some.
+        ctx.new_samples.clear();
+        return;
+    }
+    SDL_PutAudioStreamData(stream, ctx.new_samples.data(), (int)(ctx.new_samples.size() * sizeof(float)));
+    ctx.last_sample = ctx.new_samples.back();
+    ctx.new_samples.clear();
 }
 
 static void clear_apu_history()
@@ -1775,23 +1799,13 @@ int main(int argc, char* argv[])
         return -1;
     }
 
-    ctx.audio_device = SDL_OpenAudioDevice(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &audio_spec);
-    if (ctx.audio_device == 0)
+    ctx.audio_stream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &audio_spec, audio_callback, nullptr);
+    if (ctx.audio_stream == 0)
     {
-        SPDLOG_ERROR("Error: SDL_OpenAudioDevice(): {}", SDL_GetError());
+        SPDLOG_ERROR("Error: SDL_OpenAudioDeviceStream(): {}", SDL_GetError());
         return -1;
     }
-    ctx.audio_stream = SDL_CreateAudioStream(&audio_spec, &audio_spec);
-    if (ctx.audio_stream == nullptr)
-    {
-        SPDLOG_ERROR("Error: SDL_CreateAudioStream(): {}", SDL_GetError());
-        return -1;
-    }
-    if (!SDL_BindAudioStream(ctx.audio_device, ctx.audio_stream))
-    {
-        SPDLOG_ERROR("Error: SDL_BindAudioStream(): {}", SDL_GetError());
-        return -1;
-    }
+    SDL_ResumeAudioStreamDevice(ctx.audio_stream);
     ctx.debug_apu.pulse1_history.resize(MIXER_HISTORY_LENGTH, 0);
     ctx.debug_apu.pulse2_history.resize(MIXER_HISTORY_LENGTH, 0);
     ctx.debug_apu.triangle_history.resize(MIXER_HISTORY_LENGTH, 0);
@@ -1860,6 +1874,7 @@ int main(int argc, char* argv[])
         uint64_t frames_expected = current_ticks * 60 / 1000;
         if (!ctx.debug_control.pause && ctx.nes->cart)
         {
+            SDL_LockAudioStream(ctx.audio_stream);
             for (int i = 0; i < 5 && frames_run < frames_expected; i++)
             {
                 for (int j = 0; j < ctx.debug_control.emulation_speed; j++)
@@ -1868,11 +1883,9 @@ int main(int argc, char* argv[])
                 }
                 frames_run++;
             }
+            SDL_UnlockAudioStream(ctx.audio_stream);
         }
         frames_run = frames_expected;
-
-        SDL_PutAudioStreamData(ctx.audio_stream, ctx.new_samples.data(), (int)ctx.new_samples.size() * sizeof(float));
-        ctx.new_samples.clear();
 
         // Begin rendering
 
@@ -1923,9 +1936,7 @@ int main(int argc, char* argv[])
     ImGui_ImplSDL3_Shutdown();
     ImGui::DestroyContext();
 
-    SDL_UnbindAudioStream(ctx.audio_stream);
     SDL_DestroyAudioStream(ctx.audio_stream);
-    SDL_CloseAudioDevice(ctx.audio_device);
     for (auto& image : ctx.debug_palette.images)
     {
         SDL_DestroyTexture(image.texture);
