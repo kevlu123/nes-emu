@@ -1528,6 +1528,42 @@ static void handle_key_down(const SDL_KeyboardEvent& key)
             ctx.debug_control.pause = !ctx.debug_control.pause;
         }
         break;
+    case SDLK_B:
+        if (ctrl)
+        {
+            ctx.nes->ppu.debug.enable_bg = !ctx.nes->ppu.debug.enable_bg;
+        }
+        break;
+    case SDLK_F:
+        if (ctrl)
+        {
+            ctx.nes->ppu.debug.enable_fg = !ctx.nes->ppu.debug.enable_fg;
+        }
+        break;
+    case SDLK_Z:
+        if (ctrl)
+        {
+            ctx.debug_control.show_sprite_zero_hit = !ctx.debug_control.show_sprite_zero_hit;
+        }
+        break;
+    case SDLK_Y:
+        if (ctrl)
+        {
+            ctx.nes->ppu.debug.enable_greyscale = !ctx.nes->ppu.debug.enable_greyscale;
+        }
+        break;
+    case SDLK_M:
+        if (ctrl)
+        {
+            ctx.nes->apu.debug.enabled = !ctx.nes->apu.debug.enabled;
+        }
+        break;
+    case SDLK_G:
+        if (ctrl)
+        {
+            ctx.debug_control.show_grid = !ctx.debug_control.show_grid;
+        }
+        break;
     case SDLK_F10:
         do_action(shift ? action_t::clock_scanline : action_t::clock_frame);
         break;

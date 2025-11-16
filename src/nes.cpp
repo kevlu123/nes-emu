@@ -10,7 +10,6 @@ namespace nes
           apu(cpu_bus),
           oam_dma(cpu_bus),
           ppu_clock_count(0),
-          screen_buffer{},
           on_clock(on_clock),
           cpu_bus(0xFFFF, "CPU"),
           ppu_bus(0x3FFF, "PPU")
