@@ -8,13 +8,40 @@
 
 namespace nes
 {
+    struct pixel_trace_t
+    {
+        struct
+        {
+            uint8_t tile_index;
+            uint8_t pattern_table : 1;
+            uint8_t attribute : 2;
+            uint8_t pattern : 2;
+            uint8_t hidden : 1;
+        } bg;
+        struct
+        {
+            uint8_t sprite_index;
+            uint8_t x;
+            uint8_t y;
+            uint8_t tile_index;
+            uint8_t pattern_table : 1;
+            uint8_t attribute : 2;
+            uint8_t pattern : 2;
+            uint8_t flip_horizontally : 1;
+            uint8_t flip_vertically : 1;
+            uint8_t priority : 1;
+            uint8_t is_8x16 : 1;
+            uint8_t exists : 1;
+        } fg;
+    };
+
     struct oam_t
     {
         uint8_t y;
         uint8_t tile_index;
         struct
         {
-            uint8_t palette : 2;
+            uint8_t attribute : 2;
             uint8_t unused : 3;
             uint8_t priority : 1;
             uint8_t flip_horizontally : 1;
@@ -233,12 +260,35 @@ namespace nes
 
         struct
         {
+            struct pixel_trace_slots_t
+            {
+                pixel_trace_t slots[2];
+                int slot;
+            };
+            std::vector<pixel_trace_slots_t> pixel_trace;
+            struct
+            {
+                uint16_t tile_index;
+                uint8_t pattern_table;
+                uint8_t attribute;
+
+                struct
+                {
+                    oam_t oam;
+                    uint8_t sprite_index;
+                    uint8_t pattern_table;
+                    bool is_8x16;
+                } sprite_output[8];
+                uint8_t secondary_oam_indices[8];
+            } trace_info;
+
             std::optional<int> sprite_zero_hit_dot;
             std::optional<int> sprite_zero_hit_scanline;
+            int centre_scroll_x = 0;
+            int centre_scroll_y = 0;
             bool enable_bg = true;
             bool enable_fg = true;
             bool enable_greyscale = false;
-            bool enable_pixel_trace = false;
         } debug;
 
     private:

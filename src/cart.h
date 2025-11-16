@@ -55,7 +55,6 @@ namespace nes
         static std::unique_ptr<cart_t> load(std::vector<uint8_t> rom);
         void reset();
 
-        mirroring_t get_mirroring() const;
         bool cpu_read(uint16_t addr, uint8_t& value, bool allow_side_effects);
         bool cpu_write(uint16_t addr, uint8_t value);
         bool ppu_read(uint16_t addr, uint8_t& value, bool allow_side_effects);

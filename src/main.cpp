@@ -147,6 +147,7 @@ static struct
         int show_pixel_trace = 0;
         bool pause = false;
         int emulation_speed = 1;
+        std::optional<nes::pixel_trace_t> pixel_trace;
         std::string cart_name;
     } debug_control;
 
@@ -158,7 +159,7 @@ static struct
 
     struct
     {
-        debug_image_t<4, 1> images[8];
+        debug_image_t<4 * 8, 1 * 8> images[8];
     } debug_palette;
 
     struct
@@ -241,7 +242,7 @@ static void do_action(action_t action)
     }
 }
 
-static SDL_Texture* CreateTexture(int width, int height)
+static SDL_Texture* create_texture(int width, int height)
 {
     SDL_Texture* texture = SDL_CreateTexture(
         ctx.renderer,
@@ -259,9 +260,9 @@ static SDL_Texture* CreateTexture(int width, int height)
 }
 
 template <size_t Width, size_t Height>
-static bool CreateTexture(debug_image_t<Width, Height>& debug_image)
+static bool create_texture(debug_image_t<Width, Height>& debug_image)
 {
-    debug_image.texture = CreateTexture(
+    debug_image.texture = create_texture(
         (int)Width,
         (int)Height);
     return debug_image.texture != nullptr;
@@ -348,6 +349,22 @@ static void draw_centred_image(SDL_Texture* texture)
 
     ImGui::SetCursorPos(ImGui::GetWindowContentRegionMin() + ImVec2{ dst_rect.x, dst_rect.y });
     ImGui::Image(texture, ImVec2{ dst_rect.w, dst_rect.h });
+}
+
+static void draw_rectangle(uint8_t* pixels, int width, int height, int pitch,
+                           size_t x, size_t y, size_t rect_width, size_t rect_height,
+                           colour_t colour = colour_t{ 255, 0, 0, 255 })
+{
+    for (int dy = 0; dy < rect_height; dy++)
+    {
+        ((colour_t*)(pixels + (y + dy) * pitch))[x] = colour;
+        ((colour_t*)(pixels + (y + dy) * pitch))[x + rect_width - 1] = colour;
+    }
+    for (int dx = 1; dx < rect_width - 1; dx++)
+    {
+        ((colour_t*)(pixels + y * pitch))[x + dx] = colour;
+        ((colour_t*)(pixels + (y + rect_height - 1) * pitch))[x + dx] = colour;
+    }
 }
 
 static void draw_separator()
@@ -630,8 +647,11 @@ static void show_palette()
         for (uint8_t is_fg = 0; is_fg < 2; is_fg++)
         for (uint8_t attribute = 0; attribute < 4; attribute++)
         for (uint8_t pattern = 0; pattern < 4; pattern++)
+        for (uint8_t y = 0; y < 8; y++)
+        for (uint8_t x = 0; x < 8; x++)
         {
-            ctx.debug_palette.images[is_fg * 4 + attribute].data[pattern] = ctx.nes->ppu_bus.read(
+            auto& image = ctx.debug_palette.images[is_fg * 4 + attribute];
+            image.data[(y * image.width) + (pattern * 8) + x] = ctx.nes->ppu_bus.read(
                 nes::ppu_t::get_palette_addr(
                     is_fg,
                     attribute,
@@ -639,43 +659,38 @@ static void show_palette()
                 false);
         }
 
-        for (auto& image: ctx.debug_palette.images)
+        for (int i = 0; i < 4; i++)
         {
-            write_texture(image);
+            for (int is_fg = 0; is_fg < 2; is_fg++)
+            {
+                auto& image = ctx.debug_palette.images[is_fg * 4 + i];
+                write_texture(image, [&](uint8_t *pixels, int width, int height, int pitch)
+                {
+                    if (ctx.debug_control.pixel_trace)
+                    {
+                        if (!is_fg && ctx.debug_control.pixel_trace->bg.attribute == i)
+                        {
+                            size_t pattern = ctx.debug_control.pixel_trace->bg.pattern;
+                            draw_rectangle(pixels, width, height, pitch, pattern * 8, 0, 8, 8);
+                        }
+                        if (is_fg && ctx.debug_control.pixel_trace->fg.exists
+                            && ctx.debug_control.pixel_trace->fg.attribute == i)
+                        {
+                            size_t pattern = ctx.debug_control.pixel_trace->fg.pattern;
+                            draw_rectangle(pixels, width, height, pitch, pattern * 8, 0, 8, 8);
+                        }
+                    }
+                });
+
+                ImGui::Text("%s %d:", is_fg ? "FG" : "BG", i);
+                ImGui::SameLine();
+                ImGui::Image(image.texture, ImVec2{ 16 * 4, 16 * 1 });
+                if (!is_fg)
+                {
+                    ImGui::SameLine();
+                }
+            }
         }
-        constexpr ImVec2 image_size = { 16 * 4, 16 * 1 };
-
-        ImGui::Text("BG 0");
-        ImGui::SameLine();
-        ImGui::Image(ctx.debug_palette.images[0].texture, image_size);
-        ImGui::SameLine();
-        ImGui::Text("FG 0");
-        ImGui::SameLine();
-        ImGui::Image(ctx.debug_palette.images[4].texture, image_size);
-
-        ImGui::Text("BG 1");
-        ImGui::SameLine();
-        ImGui::Image(ctx.debug_palette.images[1].texture, image_size);
-        ImGui::SameLine();
-        ImGui::Text("FG 1");
-        ImGui::SameLine();
-        ImGui::Image(ctx.debug_palette.images[5].texture, image_size);
-
-        ImGui::Text("BG 2");
-        ImGui::SameLine();
-        ImGui::Image(ctx.debug_palette.images[2].texture, image_size);
-        ImGui::SameLine();
-        ImGui::Text("FG 2");
-        ImGui::SameLine();
-        ImGui::Image(ctx.debug_palette.images[6].texture, image_size);
-
-        ImGui::Text("BG 3");
-        ImGui::SameLine();
-        ImGui::Image(ctx.debug_palette.images[3].texture, image_size);
-        ImGui::SameLine();
-        ImGui::Text("FG 3");
-        ImGui::SameLine();
-        ImGui::Image(ctx.debug_palette.images[7].texture, image_size);
     }
     ImGui::End();
 }
@@ -684,6 +699,7 @@ static void show_pattern_table()
 {
     if (ImGui::Begin("PATTERN TABLE"))
     {
+        constexpr uint8_t colours[4] = { 0x0F, 0x00, 0x10, 0x20 };
         size_t i = 0;
         for (uint8_t lr_table = 0; lr_table < 2; lr_table++)
         for (uint8_t coarse_y = 0; coarse_y < 16; coarse_y++)
@@ -708,12 +724,30 @@ static void show_pattern_table()
             {
                 uint8_t pattern = ((pattern_lo >> fine_x) & 1)
                     | (((pattern_hi >> fine_x) & 1) << 1);
-                static const uint8_t colours[4] = { 0x0F, 0x00, 0x10, 0x20 };
                 ctx.debug_pattern_table.image.data[i++] = colours[pattern];
             }
         }
 
-        write_texture(ctx.debug_pattern_table.image);
+        write_texture(ctx.debug_pattern_table.image, [](uint8_t *pixels, int width, int height, int pitch)
+        {
+            if (ctx.debug_control.pixel_trace)
+            {
+                size_t tile_index = ctx.debug_control.pixel_trace->bg.tile_index;
+                size_t pattern_table = ctx.nes->ppu.ppuctrl.bg_pattern_table_addr;
+                size_t y = (pattern_table * 16 * 8) + (tile_index / 16 * 8);
+                size_t x = (tile_index % 16 * 8);
+                draw_rectangle(pixels, width, height, pitch, x, y, 8, 8);
+
+                if (ctx.debug_control.pixel_trace->fg.exists)
+                {
+                    tile_index = ctx.debug_control.pixel_trace->fg.tile_index;
+                    pattern_table = ctx.debug_control.pixel_trace->fg.pattern_table;
+                    y = (pattern_table * 16 * 8) + (tile_index / 16 * 8);
+                    x = (tile_index % 16 * 8);
+                    draw_rectangle(pixels, width, height, pitch, x, y, 8, 8);
+                }
+            }
+        });
         draw_centred_image(ctx.debug_pattern_table.image.texture);
     }
     ImGui::End();
@@ -813,12 +847,10 @@ static void show_nametable()
 
         write_texture(ctx.debug_nametable.image, [](uint8_t *pixels, int width, int height, int pitch)
         {
-            size_t left = (ctx.nes->ppu.t_vram_addr.nametable_select & 1) * 256
-                + ctx.nes->ppu.t_vram_addr.coarse_x_scroll * 8
-                + ctx.nes->ppu.x_scroll.value;
-            size_t top = (ctx.nes->ppu.t_vram_addr.nametable_select >> 1) * 240
-                + ctx.nes->ppu.t_vram_addr.coarse_y_scroll * 8
-                + ctx.nes->ppu.t_vram_addr.fine_y_scroll;
+            size_t left = ctx.nes->ppu.debug.centre_scroll_x;
+            size_t top = (ctx.nes->ppu.debug.centre_scroll_y & 0xFF)
+                + ((ctx.nes->ppu.debug.centre_scroll_y & 0x100) ? 240 : 0);
+
             auto draw_red = [&](size_t x, size_t y)
             {
                 size_t xx = x % 512;
@@ -911,12 +943,20 @@ static void show_sprites()
                         image.data[y * 8 + x] = ctx.nes->ppu_bus.read(
                             nes::ppu_t::get_palette_addr(
                                 1,
-                                oam.palette,
+                                oam.attribute,
                                 pattern),
                             false);
                     }
                 }
-                write_texture(image);
+                write_texture(image, [&](uint8_t *pixels, int width, int height, int pitch)
+                {
+                    if (ctx.debug_control.pixel_trace
+                        && ctx.debug_control.pixel_trace->fg.exists
+                        && ctx.debug_control.pixel_trace->fg.sprite_index == i + j)
+                    {
+                        draw_rectangle(pixels, width, height, pitch, 0, 0, 8, sprite_size);
+                    }
+                });
 
                 ImVec4 colour = oam.y < 0xEF
                     ? ImVec4(1.0f, 1.0f, 1.0f, 1.0f)
@@ -932,7 +972,7 @@ static void show_sprites()
                     oam.tile_index,
                     oam.x,
                     oam.y,
-                    oam.palette,
+                    oam.attribute,
                     oam.priority ? 'P' : '.',
                     oam.flip_horizontally ? 'H' : '.',
                     oam.flip_vertically ? 'V' : '.');
@@ -991,6 +1031,23 @@ static void show_control()
             ctx.nes->ppu.t_vram_addr.coarse_y_scroll * 8
                 + ctx.nes->ppu.t_vram_addr.fine_y_scroll,
             (ctx.nes->ppu.t_vram_addr.nametable_select & 2) ? 240 : 0);
+        const char* mirroring;
+        if (ctx.nes->cart)
+        {
+            switch (ctx.nes->cart->mapper->mirroring)
+            {
+                case nes::mirroring_t::horizontal:      mirroring = "Horizontal";      break;
+                case nes::mirroring_t::vertical:        mirroring = "Vertical";        break;
+                case nes::mirroring_t::one_screen_low:  mirroring = "One-screen low";  break;
+                case nes::mirroring_t::one_screen_high: mirroring = "One-screen high"; break;
+                default:                                mirroring = "Unknown";         break;
+            }
+        }
+        else
+        {
+            mirroring = "-";
+        }
+        ImGui::Text("Mirroring: %s", mirroring);
 
         draw_separator();
         if (ImGui::Button("Step frame"))
@@ -1032,15 +1089,6 @@ static void show_control()
         ImGui::Checkbox("Show grid", &ctx.debug_control.show_grid);
         ImGui::Checkbox("Show sprite 0 hit", &ctx.debug_control.show_sprite_zero_hit);
         ImGui::Checkbox("Force greyscale", &ctx.nes->ppu.debug.enable_greyscale);
-        ImGui::Checkbox("Enable pixel tracing", &ctx.nes->ppu.debug.enable_pixel_trace);
-
-        if (ctx.nes->ppu.debug.enable_pixel_trace
-                && ctx.debug_control.show_pixel_trace
-                && ImGui::BeginTooltip())
-        {
-            ImGui::Text("test");
-            ImGui::EndTooltip();
-        }
     }
     ImGui::End();
 }
@@ -1139,6 +1187,7 @@ static void show_apu()
 
 static void show_screen()
 {
+    ctx.debug_control.pixel_trace = std::nullopt;
     if (ImGui::Begin("DISPLAY"))
     {
         write_texture(ctx.screen_texture, ctx.nes->screen_buffer, [](uint8_t* pixels, int width, int height, int pitch)
@@ -1179,6 +1228,56 @@ static void show_screen()
             }
         });
         draw_centred_image(ctx.screen_texture);
+        if (ImGui::IsItemHovered() && ctx.debug_control.show_pixel_trace)
+        {
+            int x = (int)((ImGui::GetIO().MousePos.x - ImGui::GetItemRectMin().x)
+                * nes::ppu_t::SCREEN_WIDTH
+                / (ImGui::GetItemRectMax().x - ImGui::GetItemRectMin().x));
+            int y = (int)((ImGui::GetIO().MousePos.y - ImGui::GetItemRectMin().y)
+                * nes::ppu_t::SCREEN_HEIGHT
+                / (ImGui::GetItemRectMax().y - ImGui::GetItemRectMin().y));
+            x = std::clamp(x, 0, nes::ppu_t::SCREEN_WIDTH - 1);
+            y = std::clamp(y, 0, nes::ppu_t::SCREEN_HEIGHT - 1);
+
+            ImGui::PopStyleVar();
+            if (ImGui::BeginTooltip())
+            {
+                auto& trace = ctx.nes->ppu.debug.pixel_trace[y * nes::ppu_t::SCREEN_WIDTH + x];
+                if (trace.slot == 0)
+                {
+                    ImGui::Text("No pixel data");
+                }
+                else
+                {
+                    auto& slot = trace.slots[trace.slot - 1];
+                    ctx.debug_control.pixel_trace = slot;
+                    ImGui::Text("Position: (%d, %d)", x, y);
+
+                    draw_separator();
+                    ImGui::Text("Background");
+                    ImGui::Text("  Tile index:    0x%02X", slot.bg.tile_index);
+                    ImGui::Text("  Pattern table: %s", slot.bg.pattern_table ? "Right" : "Left");
+                    ImGui::Text("  Attribute:     %d", slot.bg.attribute);
+                    ImGui::Text("  Hidden:        %s", slot.bg.hidden ? "Yes" : "No");
+                    
+                    if (slot.fg.exists)
+                    {
+                        draw_separator();
+                        ImGui::Text("Sprite");
+                        ImGui::Text("  Sprite index:  0x%02X", slot.fg.sprite_index);
+                        ImGui::Text("  Tile index:    0x%02X", slot.fg.tile_index);
+                        ImGui::Text("  Pattern table: %s", slot.fg.pattern_table ? "Right" : "Left");
+                        ImGui::Text("  Attribute:     %d", slot.fg.attribute);
+                        ImGui::Text("  Priority:      %s", slot.fg.priority ? "Behind BG" : "Over BG");
+                        ImGui::Text("  Size:          %s", slot.fg.is_8x16 ? "8x16" : "8x8");
+                        ImGui::Text("  Flip H:        %s", slot.fg.flip_horizontally ? "Yes" : "No");
+                        ImGui::Text("  Flip V:        %s", slot.fg.flip_vertically ? "Yes" : "No");
+                    }
+                }
+                ImGui::EndTooltip();
+            }
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{0, 1});
+        }
     }
     ImGui::End();
 }
@@ -1422,69 +1521,69 @@ int main(int argc, char* argv[])
         SDL_WINDOWPOS_CENTERED);
     SDL_ShowWindow(ctx.window);
 
-    ctx.screen_texture = CreateTexture(
+    ctx.screen_texture = create_texture(
         nes::ppu_t::SCREEN_WIDTH,
         nes::ppu_t::SCREEN_HEIGHT);
     if (ctx.screen_texture == nullptr)
     {
-        SPDLOG_ERROR("Error: ctx.screen_texture CreateTexture(): {}", SDL_GetError());
+        SPDLOG_ERROR("Error: ctx.screen_texture create_texture(): {}", SDL_GetError());
         return -1;
     }
 
     for (auto& image : ctx.debug_palette.images)
     {
-        if (!CreateTexture(image))
+        if (!create_texture(image))
         {
-            SPDLOG_ERROR("Error: debug_palette CreateTexture(): {}", SDL_GetError());
+            SPDLOG_ERROR("Error: debug_palette create_texture(): {}", SDL_GetError());
             return -1;
         }
     }
     for (auto& image : ctx.debug_sprites.images)
     {
-        if (!CreateTexture(image))
+        if (!create_texture(image))
         {
-            SPDLOG_ERROR("Error: debug_sprites CreateTexture(): {}", SDL_GetError());
+            SPDLOG_ERROR("Error: debug_sprites create_texture(): {}", SDL_GetError());
             return -1;
         }
     }
-    if (!CreateTexture(ctx.debug_pattern_table.image))
+    if (!create_texture(ctx.debug_pattern_table.image))
     {
-        SPDLOG_ERROR("Error: debug_pattern_table CreateTexture(): {}", SDL_GetError());
+        SPDLOG_ERROR("Error: debug_pattern_table create_texture(): {}", SDL_GetError());
         return -1;
     }
-    if (!CreateTexture(ctx.debug_nametable.image))
+    if (!create_texture(ctx.debug_nametable.image))
     {
-        SPDLOG_ERROR("Error: debug_nametable CreateTexture(): {}", SDL_GetError());
+        SPDLOG_ERROR("Error: debug_nametable create_texture(): {}", SDL_GetError());
         return -1;
     }
-    if (!CreateTexture(ctx.debug_apu.pulse1_image))
+    if (!create_texture(ctx.debug_apu.pulse1_image))
     {
-        SPDLOG_ERROR("Error: debug_pulse1 CreateTexture(): {}", SDL_GetError());
+        SPDLOG_ERROR("Error: debug_pulse1 create_texture(): {}", SDL_GetError());
         return -1;
     }
-    if (!CreateTexture(ctx.debug_apu.pulse2_image))
+    if (!create_texture(ctx.debug_apu.pulse2_image))
     {
-        SPDLOG_ERROR("Error: debug_pulse2 CreateTexture(): {}", SDL_GetError());
+        SPDLOG_ERROR("Error: debug_pulse2 create_texture(): {}", SDL_GetError());
         return -1;
     }
-    if (!CreateTexture(ctx.debug_apu.triangle_image))
+    if (!create_texture(ctx.debug_apu.triangle_image))
     {
-        SPDLOG_ERROR("Error: debug_triangle CreateTexture(): {}", SDL_GetError());
+        SPDLOG_ERROR("Error: debug_triangle create_texture(): {}", SDL_GetError());
         return -1;
     }
-    if (!CreateTexture(ctx.debug_apu.noise_image))
+    if (!create_texture(ctx.debug_apu.noise_image))
     {
-        SPDLOG_ERROR("Error: debug_noise CreateTexture(): {}", SDL_GetError());
+        SPDLOG_ERROR("Error: debug_noise create_texture(): {}", SDL_GetError());
         return -1;
     }
-    if (!CreateTexture(ctx.debug_apu.dmc_image))
+    if (!create_texture(ctx.debug_apu.dmc_image))
     {
-        SPDLOG_ERROR("Error: debug_dmc CreateTexture(): {}", SDL_GetError());
+        SPDLOG_ERROR("Error: debug_dmc create_texture(): {}", SDL_GetError());
         return -1;
     }
-    if (!CreateTexture(ctx.debug_apu.mixer_image))
+    if (!create_texture(ctx.debug_apu.mixer_image))
     {
-        SPDLOG_ERROR("Error: debug_mixer CreateTexture(): {}", SDL_GetError());
+        SPDLOG_ERROR("Error: debug_mixer create_texture(): {}", SDL_GetError());
         return -1;
     }
 

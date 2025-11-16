@@ -42,6 +42,8 @@ namespace nes
         ppu_bus.connect_read<&ppu_t::ppu_read>(this);
         ppu_bus.connect_write<&ppu_t::ppu_write>(this);
         memset(palette, 0x0F, sizeof(palette));
+        memset(screen_buffer, 0x0F, SCREEN_WIDTH * SCREEN_HEIGHT);
+        debug.pixel_trace.resize(SCREEN_WIDTH * SCREEN_HEIGHT);
     }
 
     ppu_t::~ppu_t()
@@ -53,10 +55,12 @@ namespace nes
     void ppu_t::reset()
     {
         cart_t *cart = this->cart;
-        auto ppu_debug = debug;
+        auto ppu_debug = std::move(this->debug);
         *this = ppu_t(*ppu_bus, *oam_dma, screen_buffer);
         set_cart(cart);
-        debug = ppu_debug;
+        this->debug = std::move(ppu_debug);
+        memset(debug.pixel_trace.data(), 0, debug.pixel_trace.size() * sizeof(debug.pixel_trace[0]));
+        memset(&debug.trace_info, 0, sizeof(debug.trace_info));
     }
 
     void ppu_t::set_cart(cart_t* cart)
@@ -309,7 +313,7 @@ namespace nes
             secondary_oam_bytes[dot / 2 - 1] = 0xFF;
         }
 
-        if (dot == 257 && scanline < SCREEN_HEIGHT)
+        if (dot == 257 && (scanline < SCREEN_HEIGHT || scanline == SCANLINES - 1))
         {
             secondary_oam_count = 0;
             sprite_zero_found = sprite_zero_found_next;
@@ -322,6 +326,7 @@ namespace nes
                 if (oam_y < 239 && scanline >= oam_y && scanline < oam_y + sprite_size)
                 {
                     secondary_oam[secondary_oam_count] = oam[n];
+                    debug.trace_info.secondary_oam_indices[secondary_oam_count] = n;
                     secondary_oam_count++;
                     if (n == 0)
                     {
@@ -353,7 +358,7 @@ namespace nes
             {
                 const oam_t& oam = secondary_oam[i];
                 auto& output = sprite_output[i];
-                output.attribute = oam.palette;
+                output.attribute = oam.attribute;
                 output.priority = oam.priority;
                 output.x = oam.x;
                 int fine_y = scanline - oam.y;
@@ -389,6 +394,15 @@ namespace nes
                     output.pattern_lo = reverse_bits(output.pattern_lo);
                     output.pattern_hi = reverse_bits(output.pattern_hi);
                 }
+                auto& debug_sprite = debug.trace_info.sprite_output[i];
+                debug_sprite.oam = oam;
+                if (sprite_size == 16)
+                {
+                    debug_sprite.oam.tile_index &= 0xFE;
+                }
+                debug_sprite.pattern_table = pattern_table;
+                debug_sprite.is_8x16 = sprite_size == 16;
+                debug_sprite.sprite_index = debug.trace_info.secondary_oam_indices[i];
             }
         }
 
@@ -432,7 +446,8 @@ namespace nes
         {
             uint8_t bg_pattern = 0;
             uint8_t bg_attribute = 0;
-            if (ppumask.enable_bg && !(ppumask.show_bg_left8 == 0 && dot <= 8))
+            bool bg_hidden = !ppumask.enable_bg || (ppumask.show_bg_left8 == 0 && dot <= 8);
+            if (!bg_hidden)
             {
                 bg_pattern = ((pattern_lo_read_shift_reg >> x_scroll.value) & 1)
                     | (((pattern_hi_read_shift_reg >> x_scroll.value) & 1) << 1);
@@ -454,7 +469,7 @@ namespace nes
                 uint8_t fg_pattern = 0;
                 uint8_t fg_attribute = 0;
                 bool back_priority = false;
-                bool found_sprite = false;
+                int found_sprite = -1;
                 bool sprite_zero_opaque = false;
                 for (int i = 0; i < secondary_oam_count; i++)
                 {
@@ -462,7 +477,7 @@ namespace nes
                     if (dot - 1 >= sprite.x && dot - 1 < sprite.x + 8)
                     {
                         int pattern = ((sprite.pattern_hi >> 7) << 1) | (sprite.pattern_lo >> 7);
-                        if (!found_sprite && ppumask.enable_sprite && !(ppumask.show_sprite_left8 == 0 && dot <= 8))
+                        if (found_sprite == -1 && ppumask.enable_sprite && !(ppumask.show_sprite_left8 == 0 && dot <= 8))
                         {
                             if (sprite_zero_found && i == 0)
                             {
@@ -470,7 +485,7 @@ namespace nes
                             }
                             if (pattern != 0)
                             {
-                                found_sprite = true;
+                                found_sprite = i;
                                 back_priority = sprite.priority;
                                 fg_attribute = sprite.attribute;
                                 fg_pattern = pattern;
@@ -488,7 +503,7 @@ namespace nes
                     debug.sprite_zero_hit_scanline = scanline;
                 }
 
-                bool is_fg_palette = found_sprite
+                bool is_fg_palette = found_sprite != -1
                     && ((fg_pattern != 0 && !back_priority) || bg_pattern == 0)
                     && debug.enable_fg;
                 uint8_t final_pattern = is_fg_palette ? fg_pattern : bg_pattern;
@@ -508,6 +523,33 @@ namespace nes
                     colour_index &= 0x30;
                 }
                 screen_buffer[scanline * SCREEN_WIDTH + dot - 1] = colour_index;
+
+                auto& trace = debug.pixel_trace[(dot - 1) + scanline * SCREEN_WIDTH];
+                trace.slot = trace.slot == 1 ? 2 : 1;
+                auto& slot = trace.slots[trace.slot - 1];
+
+                slot.bg.tile_index = debug.trace_info.tile_index & 0xFF;
+                slot.bg.pattern_table = debug.trace_info.pattern_table;
+                slot.bg.attribute = debug.trace_info.attribute;
+                slot.bg.pattern = bg_pattern;
+                slot.bg.hidden = bg_hidden;
+
+                slot.fg.exists = found_sprite != -1;
+                if (slot.fg.exists)
+                {
+                    auto& sprite = debug.trace_info.sprite_output[found_sprite];
+                    slot.fg.sprite_index = sprite.sprite_index;
+                    slot.fg.x = sprite.oam.x;
+                    slot.fg.y = sprite.oam.y;
+                    slot.fg.tile_index = sprite.oam.tile_index;
+                    slot.fg.pattern_table = sprite.pattern_table;
+                    slot.fg.attribute = sprite.oam.attribute;
+                    slot.fg.pattern = fg_pattern;
+                    slot.fg.flip_horizontally = sprite.oam.flip_horizontally;
+                    slot.fg.flip_vertically = sprite.oam.flip_vertically;
+                    slot.fg.priority = back_priority;
+                    slot.fg.is_8x16 = sprite.is_8x16;
+                }
             }
 
             switch (dot % 8)
@@ -547,6 +589,11 @@ namespace nes
                     v_vram_addr.coarse_y_scroll);
                 attribute_lo_latch = attribute & 1;
                 attribute_hi_latch = (attribute >> 1) & 1;
+
+                debug.trace_info.tile_index >>= 8;
+                debug.trace_info.tile_index |= nametable_read << 8;
+                debug.trace_info.pattern_table = ppuctrl.bg_pattern_table_addr;
+                debug.trace_info.attribute = attribute;
                 break;
             }
             }
@@ -581,6 +628,16 @@ namespace nes
             ppustatus.vblank = 0;
             ppustatus.sprite_zero_hit = 0;
             ppustatus.sprite_overflow = 0;
+        }
+
+        if (dot == 128 && scanline == 120)
+        {
+            debug.centre_scroll_x = ((t_vram_addr.nametable_select & 1) ? 256 : 0)
+                + (t_vram_addr.coarse_x_scroll * 8)
+                + x_scroll.value;
+            debug.centre_scroll_y = ((t_vram_addr.nametable_select & 2) ? 256 : 0)
+                + (t_vram_addr.coarse_y_scroll * 8)
+                + t_vram_addr.fine_y_scroll;
         }
 
         dot++;
