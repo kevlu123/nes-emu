@@ -19,11 +19,13 @@
 #include <algorithm>
 #include <filesystem>
 
-constexpr size_t AUDIO_SAMPLE_RATE = 48000;
-constexpr size_t MAX_AUDIO_LATENCY_MS = 100;
-constexpr size_t APU_DEBUG_WIDTH = 1024;
-constexpr size_t MIXER_HISTORY_LENGTH = AUDIO_SAMPLE_RATE * 2;
-constexpr size_t MAX_DEBUG_LOG_LINES = 512;
+static constexpr size_t LOG_MAX_LINES = 512;
+static constexpr size_t AUDIO_SAMPLE_RATE = 48000;
+static constexpr size_t AUDIO_MAX_LATENCY_MS = 100;
+static constexpr size_t APU_HISTORY_LENGTH = AUDIO_SAMPLE_RATE * 2;
+static constexpr float APU_MIN_VIEWPORT = -2.0f;
+static constexpr float APU_MAX_VIEWPORT = 0.0f;
+static constexpr int CPU_DISM_NEARBY = 16;
 
 static constexpr SDL_AudioSpec audio_spec = {
     .format = SDL_AUDIO_F32,
@@ -116,8 +118,8 @@ enum class action_t
 template <size_t Width, size_t Height>
 struct debug_image_t
 {
-    constexpr static size_t width = Width;
-    constexpr static size_t height = Height;
+    static constexpr size_t width = Width;
+    static constexpr size_t height = Height;
 
     SDL_Texture* texture = nullptr;
     uint8_t data[Width * Height] = { 0 };
@@ -141,12 +143,14 @@ static struct
 {
     SDL_Window* window = nullptr;
     SDL_Renderer* renderer = nullptr;
+    SDL_Texture* screen_texture = nullptr;
+
     SDL_AudioStream *audio_stream = nullptr;
+    float audio_tick_counter = 0;
     std::vector<float> new_samples;
     float last_sample = 0.0f;
+
     std::unique_ptr<nes::nes_t> nes;
-    SDL_Texture* screen_texture = nullptr;
-    float audio_tick_counter = 0;
 
     struct
     {
@@ -193,12 +197,12 @@ static struct
 
     struct
     {
-        debug_image_t<APU_DEBUG_WIDTH, 16> pulse1_image;
-        debug_image_t<APU_DEBUG_WIDTH, 16> pulse2_image;
-        debug_image_t<APU_DEBUG_WIDTH, 16> triangle_image;
-        debug_image_t<APU_DEBUG_WIDTH, 16> noise_image;
-        debug_image_t<APU_DEBUG_WIDTH, 128> dmc_image;
-        debug_image_t<APU_DEBUG_WIDTH, 128> mixer_image;
+        debug_image_t<1024, 16> pulse1_image;
+        debug_image_t<1024, 16> pulse2_image;
+        debug_image_t<1024, 16> triangle_image;
+        debug_image_t<1024, 16> noise_image;
+        debug_image_t<1024, 128> dmc_image;
+        debug_image_t<1024, 128> mixer_image;
         std::deque<uint8_t> pulse1_history;
         std::deque<uint8_t> pulse2_history;
         std::deque<uint8_t> triangle_history;
@@ -232,7 +236,7 @@ static void audio_callback(void* userdata, SDL_AudioStream* stream, int addition
         // Not enough audio. Pad with the last sample.
         ctx.new_samples.resize(want_samples, ctx.last_sample);
     }
-    else if (ctx.new_samples.size() - want_samples >= MAX_AUDIO_LATENCY_MS * AUDIO_SAMPLE_RATE / 1000)
+    else if (ctx.new_samples.size() - want_samples >= AUDIO_MAX_LATENCY_MS * AUDIO_SAMPLE_RATE / 1000)
     {
         // We have too much audio. Discard some.
         ctx.new_samples.clear();
@@ -292,22 +296,14 @@ static SDL_Texture* create_texture(int width, int height)
         SDL_TEXTUREACCESS_STREAMING,
         width,
         height);
-    if (texture == nullptr)
-    {
-        SPDLOG_ERROR("Error: SDL_CreateTexture(): {}", SDL_GetError());
-        return nullptr;
-    }
     SDL_SetTextureScaleMode(texture, SDL_SCALEMODE_NEAREST);
     return texture;
 }
 
 template <size_t Width, size_t Height>
-static bool create_texture(debug_image_t<Width, Height>& debug_image)
+static void create_texture(debug_image_t<Width, Height>& debug_image)
 {
-    debug_image.texture = create_texture(
-        (int)Width,
-        (int)Height);
-    return debug_image.texture != nullptr;
+    debug_image.texture = create_texture((int)Width, (int)Height);
 }
 
 static void write_texture(
@@ -463,12 +459,11 @@ static void show_cpu_dism()
             ctx.nes->cpu.status.c ? "C" : ".");
         ImGui::Text(" ");
 
-        const int nearby = 16;
         for (int offset = 0; offset < 3; offset++)
         {
             std::vector<disassembly_t> disassembly;
             int cur_entry = -1;
-            for (int i = -nearby * 3; i < nearby * 3;)
+            for (int i = -CPU_DISM_NEARBY * 3; i < CPU_DISM_NEARBY * 3;)
             {
                 uint16_t addr = ctx.nes->cpu.pc + i;
                 if (addr == ctx.nes->cpu.pc)
@@ -485,13 +480,13 @@ static void show_cpu_dism()
                 auto& instruction = nes::cpu_t::instructions[opcode];
 
                 bool is_write_only = instruction.opcode == &nes::cpu_t::STA
-                                || instruction.opcode == &nes::cpu_t::STX
-                                || instruction.opcode == &nes::cpu_t::STY
-                                || instruction.opcode == &nes::cpu_t::SAX
-                                || instruction.opcode == &nes::cpu_t::AXA
-                                || instruction.opcode == &nes::cpu_t::SXA
-                                || instruction.opcode == &nes::cpu_t::SYA
-                                || instruction.opcode == &nes::cpu_t::XAS;
+                                  || instruction.opcode == &nes::cpu_t::STX
+                                  || instruction.opcode == &nes::cpu_t::STY
+                                  || instruction.opcode == &nes::cpu_t::SAX
+                                  || instruction.opcode == &nes::cpu_t::AXA
+                                  || instruction.opcode == &nes::cpu_t::SXA
+                                  || instruction.opcode == &nes::cpu_t::SYA
+                                  || instruction.opcode == &nes::cpu_t::XAS;
 
                 std::string args;
                 if (instruction.addr_mode == &nes::cpu_t::IMM)
@@ -596,12 +591,12 @@ static void show_cpu_dism()
 
             if (cur_entry != -1)
             {
-                while (cur_entry > nearby)
+                while (cur_entry > CPU_DISM_NEARBY)
                 {
                     cur_entry--;
                     disassembly.erase(disassembly.begin());
                 }
-                while ((int)disassembly.size() > cur_entry + nearby)
+                while ((int)disassembly.size() > cur_entry + CPU_DISM_NEARBY)
                 {
                     disassembly.pop_back();
                 }
@@ -1229,8 +1224,8 @@ static void show_apu()
                 float zoom_amount = viewport_size * 0.1f * (io.MouseWheel > 0.0f ? 1.0f : -1.0f);
                 ctx.debug_apu.viewport_min += zoom_amount * mouse_ratio;
                 ctx.debug_apu.viewport_max -= zoom_amount * (1.0f - mouse_ratio);
-                ctx.debug_apu.viewport_min = std::clamp(ctx.debug_apu.viewport_min, -2.0f, -0.001f);    
-                ctx.debug_apu.viewport_max = std::clamp(ctx.debug_apu.viewport_max, -1.999f, 0.0f);
+                ctx.debug_apu.viewport_min = std::clamp(ctx.debug_apu.viewport_min, APU_MIN_VIEWPORT, APU_MAX_VIEWPORT - 0.001f);    
+                ctx.debug_apu.viewport_max = std::clamp(ctx.debug_apu.viewport_max, APU_MIN_VIEWPORT + 0.001f, APU_MAX_VIEWPORT);
             }
         }
 
@@ -1244,34 +1239,35 @@ static void show_apu()
         memset(ctx.debug_apu.dmc_image.data, BG, sizeof(ctx.debug_apu.dmc_image.data));
         memset(ctx.debug_apu.mixer_image.data, BG, sizeof(ctx.debug_apu.mixer_image.data));
 
-        for (size_t i = 0; i < APU_DEBUG_WIDTH; i++)
+        size_t width = ctx.debug_apu.pulse1_image.width;
+        for (size_t i = 0; i < width; i++)
         {
-            float viewport_pos = (((float)i / (float)APU_DEBUG_WIDTH)
+            float viewport_pos = (((float)i / (float)width)
                 * (ctx.debug_apu.viewport_max - ctx.debug_apu.viewport_min))
                 + ctx.debug_apu.viewport_min;
-            size_t index = MIXER_HISTORY_LENGTH + (size_t)std::floor(AUDIO_SAMPLE_RATE * viewport_pos);
-            if (index >= MIXER_HISTORY_LENGTH)
+            size_t index = APU_HISTORY_LENGTH + (size_t)std::floor(AUDIO_SAMPLE_RATE * viewport_pos);
+            if (index >= APU_HISTORY_LENGTH)
             {
                 continue;
             }
 
             uint8_t sample = ctx.debug_apu.pulse1_history[index];
-            ctx.debug_apu.pulse1_image.data[APU_DEBUG_WIDTH * (ctx.debug_apu.pulse1_image.height - sample - 1) + i] = WHITE;
+            ctx.debug_apu.pulse1_image.data[width * (ctx.debug_apu.pulse1_image.height - sample - 1) + i] = WHITE;
 
             sample = ctx.debug_apu.pulse2_history[index];
-            ctx.debug_apu.pulse2_image.data[APU_DEBUG_WIDTH * (ctx.debug_apu.pulse2_image.height - sample - 1) + i] = WHITE;
+            ctx.debug_apu.pulse2_image.data[width * (ctx.debug_apu.pulse2_image.height - sample - 1) + i] = WHITE;
 
             sample = ctx.debug_apu.triangle_history[index];
-            ctx.debug_apu.triangle_image.data[APU_DEBUG_WIDTH * (ctx.debug_apu.triangle_image.height - sample - 1) + i] = WHITE;
+            ctx.debug_apu.triangle_image.data[width * (ctx.debug_apu.triangle_image.height - sample - 1) + i] = WHITE;
 
             sample = ctx.debug_apu.noise_history[index];
-            ctx.debug_apu.noise_image.data[APU_DEBUG_WIDTH * (ctx.debug_apu.noise_image.height - sample - 1) + i] = WHITE;
+            ctx.debug_apu.noise_image.data[width * (ctx.debug_apu.noise_image.height - sample - 1) + i] = WHITE;
 
             sample = ctx.debug_apu.dmc_history[index];
-            ctx.debug_apu.dmc_image.data[APU_DEBUG_WIDTH * (ctx.debug_apu.dmc_image.height - sample - 1) + i] = WHITE;
+            ctx.debug_apu.dmc_image.data[width * (ctx.debug_apu.dmc_image.height - sample - 1) + i] = WHITE;
 
             sample = (uint8_t)(ctx.debug_apu.mixer_history[index] * 127.0f);
-            ctx.debug_apu.mixer_image.data[APU_DEBUG_WIDTH * (ctx.debug_apu.mixer_image.height - sample - 1) + i] = WHITE;
+            ctx.debug_apu.mixer_image.data[width * (ctx.debug_apu.mixer_image.height - sample - 1) + i] = WHITE;
         }
 
         write_texture(ctx.debug_apu.pulse1_image);
@@ -1605,29 +1601,30 @@ static void handle_key_down(const SDL_KeyboardEvent& key)
 
 static void on_clock()
 {
-    constexpr float TICKS_PER_SAMPLE = 5369319 / AUDIO_SAMPLE_RATE;
+    constexpr float TICKS_PER_SAMPLE = (float)nes::ppu_t::DOTS_PER_SCANLINE
+        * (float)nes::ppu_t::SCANLINES
+        * (float)nes::ppu_t::FRAME_RATE
+        / (float)AUDIO_SAMPLE_RATE;
     ctx.audio_tick_counter++;
     float ticks_per_sample = TICKS_PER_SAMPLE * ctx.debug_control.emulation_speed;
-    if (ctx.audio_tick_counter < ticks_per_sample)
+    while (ctx.audio_tick_counter >= ticks_per_sample)
     {
-        return;
+        float mixed_sample = ctx.nes->apu.get_mixed_sample();
+        ctx.debug_apu.pulse1_history.pop_front();
+        ctx.debug_apu.pulse1_history.push_back(ctx.nes->apu.pulse1.get_sample());
+        ctx.debug_apu.pulse2_history.pop_front();
+        ctx.debug_apu.pulse2_history.push_back(ctx.nes->apu.pulse2.get_sample());
+        ctx.debug_apu.triangle_history.pop_front();
+        ctx.debug_apu.triangle_history.push_back(ctx.nes->apu.triangle.get_sample());
+        ctx.debug_apu.noise_history.pop_front();
+        ctx.debug_apu.noise_history.push_back(ctx.nes->apu.noise.get_sample());
+        ctx.debug_apu.dmc_history.pop_front();
+        ctx.debug_apu.dmc_history.push_back(ctx.nes->apu.dmc.get_sample());
+        ctx.debug_apu.mixer_history.pop_front();
+        ctx.debug_apu.mixer_history.push_back(mixed_sample);
+        ctx.new_samples.push_back(mixed_sample * 2.0f - 1.0f);
+        ctx.audio_tick_counter -= ticks_per_sample;
     }
-    ctx.audio_tick_counter -= ticks_per_sample;
-
-    float mixed_sample = ctx.nes->apu.get_mixed_sample();
-    ctx.debug_apu.pulse1_history.pop_front();
-    ctx.debug_apu.pulse1_history.push_back(ctx.nes->apu.pulse1.get_sample());
-    ctx.debug_apu.pulse2_history.pop_front();
-    ctx.debug_apu.pulse2_history.push_back(ctx.nes->apu.pulse2.get_sample());
-    ctx.debug_apu.triangle_history.pop_front();
-    ctx.debug_apu.triangle_history.push_back(ctx.nes->apu.triangle.get_sample());
-    ctx.debug_apu.noise_history.pop_front();
-    ctx.debug_apu.noise_history.push_back(ctx.nes->apu.noise.get_sample());
-    ctx.debug_apu.dmc_history.pop_front();
-    ctx.debug_apu.dmc_history.push_back(ctx.nes->apu.dmc.get_sample());
-    ctx.debug_apu.mixer_history.pop_front();
-    ctx.debug_apu.mixer_history.push_back(mixed_sample);
-    ctx.new_samples.push_back(mixed_sample * 2.0f - 1.0f);
 }
 
 static void load_rom(const char* rom_file)
@@ -1655,49 +1652,54 @@ static void load_rom(const char* rom_file)
     ctx.debug_control.cart_name = path.stem().string();
 }
 
+static void on_log(const spdlog::details::log_msg& msg)
+{
+    static spdlog::pattern_formatter formatter("%H:%M:%S.%e [%l] %v");
+    spdlog::memory_buf_t formatted;
+    formatter.format(msg, formatted);
+
+    log_msg_t log;
+    log.text = std::string(formatted.data(), formatted.size());
+
+    log.colour = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
+    switch (msg.level)
+    {
+    case spdlog::level::trace:    log.colour = ImVec4(0.5f, 0.5f, 0.5f, 1.0f); break;
+    case spdlog::level::debug:    log.colour = ImVec4(0.0f, 1.0f, 1.0f, 1.0f); break;
+    case spdlog::level::info:     log.colour = ImVec4(0.0f, 1.0f, 0.0f, 1.0f); break;
+    case spdlog::level::warn:     log.colour = ImVec4(1.0f, 1.0f, 0.0f, 1.0f); break;
+    case spdlog::level::err:      log.colour = ImVec4(1.0f, 0.0f, 0.0f, 1.0f); break;
+    case spdlog::level::critical: log.colour = ImVec4(1.0f, 0.0f, 1.0f, 1.0f); break;
+    }
+
+    if (ctx.debug_log.logs.size() >= LOG_MAX_LINES)
+    {
+        ctx.debug_log.logs.pop_front();
+    }
+    ctx.debug_log.logs.push_back(std::move(log));
+    ctx.debug_log.has_new_log = true;
+}
+
 int main(int argc, char* argv[])
 {
+    // Initialise logging
+
     auto logger = std::make_shared<spdlog::logger>("logger", spdlog::sinks_init_list{
-        std::make_shared<spdlog::sinks::callback_sink_st>([](const spdlog::details::log_msg& msg)
-        {
-            static spdlog::pattern_formatter formatter("%H:%M:%S.%e [%l] %v");
-            spdlog::memory_buf_t formatted;
-            formatter.format(msg, formatted);
-
-            log_msg_t log;
-            log.text = std::string(formatted.data(), formatted.size());
-
-            log.colour = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
-            switch (msg.level)
-            {
-            case spdlog::level::trace:    log.colour = ImVec4(0.5f, 0.5f, 0.5f, 1.0f); break;
-            case spdlog::level::debug:    log.colour = ImVec4(0.0f, 1.0f, 1.0f, 1.0f); break;
-            case spdlog::level::info:     log.colour = ImVec4(0.0f, 1.0f, 0.0f, 1.0f); break;
-            case spdlog::level::warn:     log.colour = ImVec4(1.0f, 1.0f, 0.0f, 1.0f); break;
-            case spdlog::level::err:      log.colour = ImVec4(1.0f, 0.0f, 0.0f, 1.0f); break;
-            case spdlog::level::critical: log.colour = ImVec4(1.0f, 0.0f, 1.0f, 1.0f); break;
-            }
-
-            if (ctx.debug_log.logs.size() >= MAX_DEBUG_LOG_LINES)
-            {
-                ctx.debug_log.logs.pop_front();
-            }
-            ctx.debug_log.logs.push_back(std::move(log));
-            ctx.debug_log.has_new_log = true;
-        }),
+        std::make_shared<spdlog::sinks::callback_sink_st>(on_log),
         // std::make_shared<spdlog::sinks::stdout_color_sink_mt>(),
     });
     spdlog::set_default_logger(logger);
 
-    ctx.nes = std::make_unique<nes::nes_t>(on_clock);
+    // Initialise NES
 
+    ctx.nes = std::make_unique<nes::nes_t>(on_clock);
     if (argc >= 2)
     {
         const char* rom_file = argv[1];
         load_rom(rom_file);
     }
 
-    // Initialise SDL
+    // Initialise SDL window and renderer
 
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMEPAD))
     {
@@ -1705,15 +1707,13 @@ int main(int argc, char* argv[])
         return -1;
     }
 
-    SDL_WindowFlags window_flags = SDL_WINDOW_RESIZABLE
-                                 | SDL_WINDOW_HIDDEN
-                                 | SDL_WINDOW_HIGH_PIXEL_DENSITY
-                                 | SDL_WINDOW_MAXIMIZED;
     ctx.window = SDL_CreateWindow(
         "NES",
-        1280,
-        720,
-        window_flags);
+        1280, 720,
+        SDL_WINDOW_RESIZABLE
+            | SDL_WINDOW_HIDDEN
+            | SDL_WINDOW_HIGH_PIXEL_DENSITY
+            | SDL_WINDOW_MAXIMIZED);
     if (ctx.window == nullptr)
     {
         SPDLOG_ERROR("Error: SDL_CreateWindow(): {}", SDL_GetError());
@@ -1733,71 +1733,25 @@ int main(int argc, char* argv[])
         SDL_WINDOWPOS_CENTERED);
     SDL_ShowWindow(ctx.window);
 
-    ctx.screen_texture = create_texture(
-        nes::ppu_t::SCREEN_WIDTH,
-        nes::ppu_t::SCREEN_HEIGHT);
-    if (ctx.screen_texture == nullptr)
-    {
-        SPDLOG_ERROR("Error: ctx.screen_texture create_texture(): {}", SDL_GetError());
-        return -1;
-    }
-
+    ctx.screen_texture = create_texture(nes::ppu_t::SCREEN_WIDTH, nes::ppu_t::SCREEN_HEIGHT);
     for (auto& image : ctx.debug_palette.images)
     {
-        if (!create_texture(image))
-        {
-            SPDLOG_ERROR("Error: debug_palette create_texture(): {}", SDL_GetError());
-            return -1;
-        }
+        create_texture(image);
     }
     for (auto& image : ctx.debug_sprites.images)
     {
-        if (!create_texture(image))
-        {
-            SPDLOG_ERROR("Error: debug_sprites create_texture(): {}", SDL_GetError());
-            return -1;
-        }
+        create_texture(image);
     }
-    if (!create_texture(ctx.debug_pattern_table.image))
-    {
-        SPDLOG_ERROR("Error: debug_pattern_table create_texture(): {}", SDL_GetError());
-        return -1;
-    }
-    if (!create_texture(ctx.debug_nametable.image))
-    {
-        SPDLOG_ERROR("Error: debug_nametable create_texture(): {}", SDL_GetError());
-        return -1;
-    }
-    if (!create_texture(ctx.debug_apu.pulse1_image))
-    {
-        SPDLOG_ERROR("Error: debug_pulse1 create_texture(): {}", SDL_GetError());
-        return -1;
-    }
-    if (!create_texture(ctx.debug_apu.pulse2_image))
-    {
-        SPDLOG_ERROR("Error: debug_pulse2 create_texture(): {}", SDL_GetError());
-        return -1;
-    }
-    if (!create_texture(ctx.debug_apu.triangle_image))
-    {
-        SPDLOG_ERROR("Error: debug_triangle create_texture(): {}", SDL_GetError());
-        return -1;
-    }
-    if (!create_texture(ctx.debug_apu.noise_image))
-    {
-        SPDLOG_ERROR("Error: debug_noise create_texture(): {}", SDL_GetError());
-        return -1;
-    }
-    if (!create_texture(ctx.debug_apu.dmc_image))
-    {
-        SPDLOG_ERROR("Error: debug_dmc create_texture(): {}", SDL_GetError());
-        return -1;
-    }
-    if (!create_texture(ctx.debug_apu.mixer_image))
-    {
-        SPDLOG_ERROR("Error: debug_mixer create_texture(): {}", SDL_GetError());
-        return -1;
-    }
+    create_texture(ctx.debug_pattern_table.image);
+    create_texture(ctx.debug_nametable.image);
+    create_texture(ctx.debug_apu.pulse1_image);
+    create_texture(ctx.debug_apu.pulse2_image);
+    create_texture(ctx.debug_apu.triangle_image);
+    create_texture(ctx.debug_apu.noise_image);
+    create_texture(ctx.debug_apu.dmc_image);
+    create_texture(ctx.debug_apu.mixer_image);
+
+    // Initialise SDL audio
 
     ctx.audio_stream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &audio_spec, audio_callback, nullptr);
     if (ctx.audio_stream == 0)
@@ -1806,14 +1760,14 @@ int main(int argc, char* argv[])
         return -1;
     }
     SDL_ResumeAudioStreamDevice(ctx.audio_stream);
-    ctx.debug_apu.pulse1_history.resize(MIXER_HISTORY_LENGTH, 0);
-    ctx.debug_apu.pulse2_history.resize(MIXER_HISTORY_LENGTH, 0);
-    ctx.debug_apu.triangle_history.resize(MIXER_HISTORY_LENGTH, 0);
-    ctx.debug_apu.noise_history.resize(MIXER_HISTORY_LENGTH, 0);
-    ctx.debug_apu.dmc_history.resize(MIXER_HISTORY_LENGTH, 0);
-    ctx.debug_apu.mixer_history.resize(MIXER_HISTORY_LENGTH, 0);
+    ctx.debug_apu.pulse1_history.resize(APU_HISTORY_LENGTH, 0);
+    ctx.debug_apu.pulse2_history.resize(APU_HISTORY_LENGTH, 0);
+    ctx.debug_apu.triangle_history.resize(APU_HISTORY_LENGTH, 0);
+    ctx.debug_apu.noise_history.resize(APU_HISTORY_LENGTH, 0);
+    ctx.debug_apu.dmc_history.resize(APU_HISTORY_LENGTH, 0);
+    ctx.debug_apu.mixer_history.resize(APU_HISTORY_LENGTH, 0);
 
-    // Initialise imgui
+    // Initialise ImGui
 
     ImGui::CreateContext();
 
@@ -1895,7 +1849,7 @@ int main(int argc, char* argv[])
         ImGui::DockSpaceOverViewport();
         SDL_RenderClear(ctx.renderer);
 
-        // Render ImGui
+        // Render
 
         show_log();
         show_cpu_dism();
@@ -1932,11 +1886,18 @@ int main(int argc, char* argv[])
 
     SPDLOG_INFO("Application exiting");
 
+    // Close ImGui
+
     ImGui_ImplSDLRenderer3_Shutdown();
     ImGui_ImplSDL3_Shutdown();
     ImGui::DestroyContext();
 
+    // Close SDL audio
+
     SDL_DestroyAudioStream(ctx.audio_stream);
+
+    // Close SDL window and renderer
+
     for (auto& image : ctx.debug_palette.images)
     {
         SDL_DestroyTexture(image.texture);

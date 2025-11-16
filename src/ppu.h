@@ -54,10 +54,10 @@ namespace nes
     {
         static constexpr int SCREEN_WIDTH = 256;
         static constexpr int SCREEN_HEIGHT = 240;
-        static constexpr float SCREEN_ASPECT =
-            (float)SCREEN_WIDTH / SCREEN_HEIGHT;
+        static constexpr float SCREEN_ASPECT = (float)SCREEN_WIDTH / SCREEN_HEIGHT;
         static constexpr int SCANLINES = 262;
         static constexpr int DOTS_PER_SCANLINE = 341;
+        static constexpr int FRAME_RATE = 60;
 
         ppu_t(bus_t& ppu_bus, oam_dma_t& oam_dma, uint8_t* screen_buffer);
         ~ppu_t();
