@@ -1425,6 +1425,30 @@ static void handle_key_up(const SDL_KeyboardEvent& key)
     case SDLK_RETURN:
         ctx.nes->controller.status[0].start = false;
         break;
+    case SDLK_LEFT:
+        ctx.nes->controller.status[1].left = false;
+        break;
+    case SDLK_RIGHT:
+        ctx.nes->controller.status[1].right = false;
+        break;
+    case SDLK_UP:
+        ctx.nes->controller.status[1].up = false;
+        break;
+    case SDLK_DOWN:
+        ctx.nes->controller.status[1].down = false;
+        break;
+    case SDLK_KP_1:
+        ctx.nes->controller.status[1].b = false;
+        break;
+    case SDLK_KP_2:
+        ctx.nes->controller.status[1].a = false;
+        break;
+    case SDLK_KP_PLUS:
+        ctx.nes->controller.status[1].select = false;
+        break;
+    case SDLK_KP_ENTER:
+        ctx.nes->controller.status[1].start = false;
+        break;
     case SDLK_LCTRL:
         ctx.debug_control.show_pixel_trace &= ~1;
         break;
@@ -1535,6 +1559,30 @@ static void handle_key_down(const SDL_KeyboardEvent& key)
         {
             ctx.nes->controller.status[0].start = true;
         }
+        break;
+    case SDLK_LEFT:
+        ctx.nes->controller.status[1].left = true;
+        break;
+    case SDLK_RIGHT:
+        ctx.nes->controller.status[1].right = true;
+        break;
+    case SDLK_UP:
+        ctx.nes->controller.status[1].up = true;
+        break;
+    case SDLK_DOWN:
+        ctx.nes->controller.status[1].down = true;
+        break;
+    case SDLK_KP_1:
+        ctx.nes->controller.status[1].b = true;
+        break;
+    case SDLK_KP_2:
+        ctx.nes->controller.status[1].a = true;
+        break;
+    case SDLK_KP_PLUS:
+        ctx.nes->controller.status[1].select = true;
+        break;
+    case SDLK_KP_ENTER:
+        ctx.nes->controller.status[1].start = true;
         break;
     case SDLK_R:
         if (ctrl)

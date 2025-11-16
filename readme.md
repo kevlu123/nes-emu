@@ -23,18 +23,18 @@ cmake --build build
 
 ## Controls
 
-| Key    | Action     |
-|--------|------------|
-| W      | DPad Up    |
-| A      | DPad Left  |
-| S      | DPad Down  |
-| D      | DPad Right |
-| ;      | B          |
-| '      | A          |
-| Enter  | Start      |
-| RShift | Select     |
+| Controller Button | Player 1 Keyboard | Player 2 Keyboard |
+|-------------------|-------------------|-------------------|
+| DPad Up           | W                 | Up                |
+| DPad Left         | A                 | Left              |
+| DPad Down         | S                 | Down              |
+| DPad Right        | D                 | Right             |
+| B                 | ;                 | Numpad 1          |
+| A                 | '                 | Numpad 2          |
+| Start             | Enter             | Numpad Enter      |
+| Select            | RShift            | Numpad Plus       |
 
-| Key       | Action                        |
+| Shortcut  | Action                        |
 |-----------|-------------------------------|
 | Alt+Enter | Toggle fullscreen             |
 | Ctrl+W    | Close ROM                     |
