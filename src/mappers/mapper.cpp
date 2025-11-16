@@ -6,7 +6,7 @@ namespace nes
 {
     mapper_t::mapper_t(cart_t& cart)
         : cart(&cart),
-          mirroring(cart.header.mirroring),
+          mirroring((mirroring_t)cart.header.mirroring),
           irq(false),
           prg_ram{}
     {

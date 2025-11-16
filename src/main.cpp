@@ -399,7 +399,7 @@ static void show_log()
         for (const auto& log : ctx.debug_log.logs)
         {
             ImGui::PushStyleColor(ImGuiCol_Text, log.colour);
-            ImGui::TextWrapped(log.text.c_str());
+            ImGui::TextWrapped("%s", log.text.c_str());
             ImGui::PopStyleColor();
         }
 
@@ -432,13 +432,12 @@ static void show_cpu_dism()
             ctx.nes->cpu.pc,
             ctx.nes->cpu.status.n ? "N" : ".",
             ctx.nes->cpu.status.v ? "V" : ".",
-            ctx.nes->cpu.status.u ? "U" : ".",
             ctx.nes->cpu.status.b ? "B" : ".",
             ctx.nes->cpu.status.d ? "D" : ".",
             ctx.nes->cpu.status.i ? "I" : ".",
             ctx.nes->cpu.status.z ? "Z" : ".",
             ctx.nes->cpu.status.c ? "C" : ".");
-        ImGui::Text("");
+        ImGui::Text(" ");
 
         const int nearby = 16;
         for (int offset = 0; offset < 3; offset++)
@@ -606,7 +605,7 @@ static void show_memory(nes::bus_t& bus, size_t end_addr, memory_edit_type_t typ
     {
         if (i)
         {
-            ImGui::Text("");
+            ImGui::Text(" ");
         }
         for (size_t j = 0; j < 0x100; j += 16)
         {
@@ -628,7 +627,7 @@ static void show_memory(nes::bus_t& bus, size_t end_addr, memory_edit_type_t typ
             }
             ImGui::Text("%04X: %02X %02X %02X %02X  %02X %02X %02X %02X  "
                 "%02X %02X %02X %02X  %02X %02X %02X %02X",
-                i + j,
+                (uint16_t)(i + j),
                 bus.read((uint16_t)(addr +  0), false),
                 bus.read((uint16_t)(addr +  1), false),
                 bus.read((uint16_t)(addr +  2), false),
@@ -984,7 +983,7 @@ static void show_sprites()
         ImGui::Text("    RAW             I  X  Y  A P H V");
         for (size_t i = 0; i < 64; i += 8)
         {
-            ImGui::Text("");
+            ImGui::Text(" ");
             for (size_t j = 0; j < 8; j++)
             {
                 auto& oam = ctx.nes->ppu.oam[i + j];
@@ -1060,7 +1059,7 @@ static void show_sprites()
                 ImGui::TextColored(
                     colour,
                     "%02X: %02X %02X %02X %02X     %02X %02X %02X %d %c %c %c",
-                    i + j,
+                    (uint8_t)(i + j),
                     ctx.nes->ppu.oam_bytes[(i + j) * 4],
                     ctx.nes->ppu.oam_bytes[(i + j) * 4 + 1],
                     ctx.nes->ppu.oam_bytes[(i + j) * 4 + 2],
@@ -1769,6 +1768,7 @@ int main(int argc, char* argv[])
     ImGui::CreateContext();
 
     ImGuiIO& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;

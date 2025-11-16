@@ -218,7 +218,10 @@ namespace nes
             }
             else
             {
-                SPDLOG_WARN("PPU read nametable without cart");
+                if (allow_side_effects)
+                {
+                    SPDLOG_WARN("PPU read nametable without cart");
+                }
                 mirroring = mirroring_t::horizontal;
             }
             switch (mirroring)

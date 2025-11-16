@@ -19,7 +19,7 @@ namespace nes
 
         uint8_t chr_chunks; // Size in 8KB units
 
-        mirroring_t mirroring : 1;
+        uint8_t mirroring : 1;
         bool has_persistent_storage : 1;
         bool has_trainer : 1;
         bool _use_alt_nametable_layout : 1;
